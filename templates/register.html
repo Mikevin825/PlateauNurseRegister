@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Register nurse · Plateau State Nurse Registry{% endblock %}
+
+{% block content %}
+<h1>Register a nurse</h1>
+<p>Record the nurse's details, licence scan, live selfie, and consent.</p>
+
+{% if form.duplicate_warning %}
+<div role="alert" style="border: 1px solid #b45309; background: #fffbeb; padding: 1rem; margin-bottom: 1rem;">
+    <strong>Possible duplicate:</strong> {{ form.duplicate_warning }}
+</div>
+{% endif %}
+
+<form method="post" enctype="multipart/form-data" novalidate>
+    {{ csrf_input }}
+    {{ form.non_field_errors() }}
+    {{ form.as_p() }}
+
+    <div>
+        <video id="camera" autoplay playsinline hidden style="max-width: 100%;"></video>
+        <canvas id="camera-canvas" hidden></canvas>
+        <button type="button" id="start-camera">Use camera for selfie</button>
+        <button type="button" id="capture-selfie" hidden>Capture selfie</button>
+    </div>
+
+    <button type="submit">Register nurse</button>
+</form>
+
+<script>
+(function () {
+    const video = document.getElementById("camera");
+    const canvas = document.getElementById("camera-canvas");
+    const startButton = document.getElementById("start-camera");
+    const captureButton = document.getElementById("capture-selfie");
+    const selfieInput = document.getElementById("id_selfie");
+    let stream = null;
+
+    if (!startButton || !captureButton || !selfieInput) {
+        return;
+    }
+
+    startButton.addEventListener("click", async function () {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            return;
+        }
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+            video.hidden = false;
+            captureButton.hidden = false;
+        } catch (error) {
+            video.hidden = true;
+            captureButton.hidden = true;
+        }
+    });
+
+    captureButton.addEventListener("click", function () {
+        if (!video.videoWidth) {
+            return;
+        }
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext("2d").drawImage(video, 0, 0);
+        canvas.toBlob(function (blob) {
+            if (!blob) {
+                return;
+            }
+            const file = new File([blob], "selfie.jpg", { type: "image/jpeg" });
+            const transfer = new DataTransfer();
+            transfer.items.add(file);
+            selfieInput.files = transfer.files;
+            if (stream) {
+                stream.getTracks().forEach(function (track) { track.stop(); });
+            }
+            video.hidden = true;
+            captureButton.hidden = true;
+        }, "image/jpeg", 0.9);
+    });
+})();
+</script>
+{% endblock %}
