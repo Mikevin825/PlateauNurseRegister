@@ -1,14 +1,613 @@
+import shutil
+import tempfile
+from datetime import timedelta
+from io import BytesIO, StringIO
+from pathlib import Path
+from types import SimpleNamespace
+
+from auditlog.models import LogEntry
+from cryptography.fernet import Fernet
 from django.conf import settings
-from django.test import TestCase
+from django.contrib import admin
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
+from django.core.management.base import CommandError
+from django.db import IntegrityError, transaction
+from django.http import Http404
+from django.test import TestCase, override_settings
+from django.urls import reverse
+from django.utils import timezone
+from PIL import Image
+
+from .crypto import decrypt_nin, encrypt_nin, get_fernet, hash_nin
+from .forms import MAX_UPLOAD_SIZE, _validate_upload
+from .models import Employer, Flag, LicenceDocument, Notification, Nurse
+from .permissions import (
+    HR,
+    OFFICER,
+    SUPER_ADMIN,
+    SUPERVISOR,
+    can_reveal_nin,
+    can_view_nurse_photo,
+    filter_employers_for_user,
+    is_officer_or_above,
+    nurses_for_user,
+)
+from .services import reveal_nin
+from .views import _serve_media
+
+User = get_user_model()
+TEST_KEY = Fernet.generate_key().decode()
 
 
-class HomePageTests(TestCase):
-    def test_home_page_renders(self):
-        response = self.client.get("/")
+def image_upload(name="selfie.jpg", color="blue"):
+    buffer = BytesIO()
+    Image.new("RGB", (20, 20), color).save(buffer, format="JPEG")
+    return SimpleUploadedFile(name, buffer.getvalue(), content_type="image/jpeg")
+
+
+def png_upload(name="scan.png"):
+    buffer = BytesIO()
+    Image.new("RGB", (20, 20), "green").save(buffer, format="PNG")
+    return SimpleUploadedFile(name, buffer.getvalue(), content_type="image/png")
+
+
+def pdf_upload(name="licence.pdf", extra=b""):
+    content = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n" + extra
+    return SimpleUploadedFile(name, content, content_type="application/pdf")
+
+
+@override_settings(NIN_ENCRYPTION_KEY=TEST_KEY)
+class RegistryTestBase(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._media_root = tempfile.mkdtemp()
+        cls._media_override = override_settings(MEDIA_ROOT=cls._media_root)
+        cls._media_override.enable()
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        cls._media_override.disable()
+        shutil.rmtree(cls._media_root, ignore_errors=True)
+
+    @classmethod
+    def setUpTestData(cls):
+        call_command("setup_groups", stdout=StringIO())
+
+        cls.employer = Employer.objects.create(
+            name="Demo Hospital",
+            type=Employer.Type.HOSPITAL,
+            lga="Jos North",
+            approved=True,
+        )
+        cls.other_employer = Employer.objects.create(
+            name="Other Clinic",
+            type=Employer.Type.CLINIC,
+            lga="Jos South",
+            approved=True,
+        )
+
+        cls.officer = User.objects.create_user(
+            username="officer", password="test-pass", is_staff=True
+        )
+        cls.officer.groups.add(Group.objects.get(name=OFFICER))
+        cls.supervisor = User.objects.create_user(
+            username="supervisor", password="test-pass", is_staff=True
+        )
+        cls.supervisor.groups.add(Group.objects.get(name=SUPERVISOR))
+        cls.super_admin = User.objects.create_user(
+            username="superadmin", password="test-pass", is_staff=True
+        )
+        cls.super_admin.groups.add(Group.objects.get(name=SUPER_ADMIN))
+        cls.hr = User.objects.create_user(username="hr", password="test-pass")
+        cls.hr.groups.add(Group.objects.get(name=HR))
+        cls.other_hr = User.objects.create_user(username="other-hr", password="test-pass")
+        cls.other_hr.groups.add(Group.objects.get(name=HR))
+        cls.no_group = User.objects.create_user(username="no-group", password="test-pass")
+        cls.employer.hr_users.add(cls.hr)
+        cls.other_employer.hr_users.add(cls.other_hr)
+
+    def create_nurse(self, **kwargs):
+        values = {
+            "full_name": "Test Nurse",
+            "phone": "08030000001",
+            "email": "nurse@example.test",
+            "licence_number": f"LIC-{Nurse.objects.count() + 1}",
+            "licence_expiry": timezone.localdate() + timedelta(days=365),
+            "employer": self.employer,
+            "record_status": Nurse.RecordStatus.PENDING,
+        }
+        nin = kwargs.pop("nin", None)
+        values.update(kwargs)
+        nurse = Nurse(**values)
+        if nin:
+            nurse.set_nin(nin)
+        nurse.save()
+        return nurse
+
+    def registration_data(self, **overrides):
+        values = {
+            "full_name": "New Nurse",
+            "phone": "08031234567",
+            "email": "new@example.test",
+            "licence_number": "PLT-LIC-NEW",
+            "licence_expiry": (timezone.localdate() + timedelta(days=365)).isoformat(),
+            "specialty": "General Nursing",
+            "cadre": "Nurse",
+            "employer": self.employer.pk,
+            "ward": "Ward 1",
+            "nin": "12345678901",
+            "consent": "on",
+            "licence_scan": pdf_upload(),
+            "selfie": image_upload(),
+        }
+        values.update(overrides)
+        return values
+
+
+class CoreModelTests(RegistryTestBase):
+    def test_tables_and_reference(self):
+        nurse = self.create_nurse(nin="12345678901")
+        self.assertEqual(nurse.reference, f"REQ-{nurse.pk:06d}")
+        self.assertTrue(Nurse._meta.db_table)
+        for model in (Employer, Nurse, LicenceDocument, Flag, Notification):
+            self.assertTrue(model._meta.db_table)
+
+    def test_approved_nurse_requires_nanm_id(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Nurse.objects.create(
+                    full_name="No ID",
+                    phone="08030000002",
+                    email="noid@example.test",
+                    licence_number="LIC-NOID",
+                    licence_expiry=timezone.localdate(),
+                    employer=self.employer,
+                    record_status=Nurse.RecordStatus.APPROVED,
+                )
+
+    def test_invalid_record_status_is_rejected(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Nurse.objects.create(
+                    full_name="Bad Status",
+                    phone="08030000003",
+                    email="bad@example.test",
+                    licence_number="LIC-BAD",
+                    licence_expiry=timezone.localdate(),
+                    employer=self.employer,
+                    record_status="bogus",
+                )
+
+    def test_nanm_id_is_unique(self):
+        self.create_nurse(
+            nanm_id="PLT-NUR-000001",
+            record_status=Nurse.RecordStatus.APPROVED,
+        )
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                self.create_nurse(
+                    nanm_id="PLT-NUR-000001",
+                    record_status=Nurse.RecordStatus.APPROVED,
+                )
+
+    def test_notification_is_unique_per_nurse_type_and_expiry(self):
+        nurse = self.create_nurse()
+        Notification.objects.create(
+            nurse=nurse,
+            type=Notification.Type.EXPIRY_REMINDER,
+            licence_expiry=nurse.licence_expiry,
+        )
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Notification.objects.create(
+                    nurse=nurse,
+                    type=Notification.Type.EXPIRY_REMINDER,
+                    licence_expiry=nurse.licence_expiry,
+                )
+
+
+class CryptoAndAuditTests(RegistryTestBase):
+    def test_encryption_round_trip_and_masking(self):
+        nurse = self.create_nurse(nin="12345678901")
+        self.assertNotEqual(nurse.nin_encrypted, "12345678901")
+        self.assertEqual(nurse.nin_last4, "8901")
+        self.assertEqual(nurse.nin_masked, "*******8901")
+        self.assertEqual(nurse.get_nin(), "12345678901")
+        self.assertEqual(decrypt_nin(nurse.nin_encrypted), "12345678901")
+
+    def test_hash_is_stable_and_not_plaintext(self):
+        first = hash_nin("12345678901")
+        second = hash_nin("12345678901")
+        other = hash_nin("12345678902")
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, other)
+        self.assertNotIn("12345678901", first)
+
+    def test_missing_and_invalid_key_raise_clear_error(self):
+        with override_settings(NIN_ENCRYPTION_KEY=""):
+            with self.assertRaises(ImproperlyConfigured):
+                get_fernet()
+        with override_settings(NIN_ENCRYPTION_KEY="not-a-key"):
+            with self.assertRaises(ImproperlyConfigured):
+                get_fernet()
+
+    def test_reveal_nin_is_audited_for_officer(self):
+        nurse = self.create_nurse(nin="12345678901")
+        self.assertEqual(reveal_nin(self.officer, nurse), "12345678901")
+        self.assertTrue(
+            LogEntry.objects.filter(
+                actor=self.officer,
+                action=LogEntry.Action.ACCESS,
+            ).exists()
+        )
+
+    def test_reveal_nin_denied_for_hr(self):
+        nurse = self.create_nurse(nin="12345678901")
+        with self.assertRaises(PermissionDenied):
+            reveal_nin(self.hr, nurse)
+        self.assertFalse(
+            LogEntry.objects.filter(
+                actor=self.hr,
+                action=LogEntry.Action.ACCESS,
+            ).exists()
+        )
+
+
+class PermissionTests(RegistryTestBase):
+    def test_groups_exist_with_permissions(self):
+        for group_name in (OFFICER, SUPERVISOR, SUPER_ADMIN, HR):
+            self.assertTrue(Group.objects.filter(name=group_name).exists())
+            self.assertGreater(Group.objects.get(name=group_name).permissions.count(), 0)
+
+    def test_role_helpers(self):
+        self.assertTrue(can_reveal_nin(self.officer))
+        self.assertTrue(can_reveal_nin(self.supervisor))
+        self.assertTrue(can_reveal_nin(self.super_admin))
+        self.assertFalse(can_reveal_nin(self.hr))
+        self.assertTrue(is_officer_or_above(self.supervisor))
+        self.assertFalse(is_officer_or_above(self.no_group))
+
+    def test_hr_scoping(self):
+        own = self.create_nurse(full_name="Own Employer")
+        other = self.create_nurse(full_name="Other Employer", employer=self.other_employer)
+
+        self.assertEqual(list(nurses_for_user(self.hr)), [own])
+        self.assertEqual(list(nurses_for_user(self.other_hr)), [other])
+        self.assertEqual(nurses_for_user(self.no_group).count(), 0)
+        self.assertEqual(nurses_for_user(self.officer).count(), 2)
+        self.assertEqual(list(filter_employers_for_user(self.hr)), [self.employer])
+        self.assertEqual(filter_employers_for_user(self.no_group).count(), 0)
+
+    def test_hr_photo_access_is_employer_scoped(self):
+        nurse = self.create_nurse()
+        self.assertTrue(can_view_nurse_photo(self.hr, nurse))
+        self.assertFalse(can_view_nurse_photo(self.other_hr, nurse))
+        self.assertTrue(can_view_nurse_photo(self.officer, nurse))
+
+
+class ProtectedMediaTests(RegistryTestBase):
+    def setUp(self):
+        self.nurse = self.create_nurse(nin="12345678901")
+        self.nurse.photo.save("selfie.jpg", image_upload(), save=True)
+        self.document = LicenceDocument.objects.create(
+            nurse=self.nurse,
+            file=pdf_upload(),
+            document_type=LicenceDocument.DocumentType.INITIAL,
+        )
+
+    def test_files_live_under_media_root(self):
+        self.assertTrue(Path(self.nurse.photo.path).is_relative_to(settings.MEDIA_ROOT))
+        self.assertTrue(Path(self.document.file.path).is_relative_to(settings.MEDIA_ROOT))
+        self.assertIn("nurse_photos/", self.nurse.photo.name)
+        self.assertIn("licence_scans/", self.document.file.name)
+
+    def test_direct_media_path_is_not_routed(self):
+        response = self.client.get(settings.MEDIA_URL + self.nurse.photo.name)
+        self.assertEqual(response.status_code, 404)
+
+    def test_anonymous_document_access_redirects_to_login(self):
+        response = self.client.get(
+            reverse("registry:protected_document", args=[self.document.pk])
+        )
+        self.assertEqual(response.status_code, 302)
+
+    def test_hr_cannot_view_licence_document(self):
+        self.client.force_login(self.hr)
+        response = self.client.get(
+            reverse("registry:protected_document", args=[self.document.pk])
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_officer_can_view_licence_document(self):
+        self.client.force_login(self.officer)
+        response = self.client.get(
+            reverse("registry:protected_document", args=[self.document.pk])
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"%PDF-", b"".join(response.streaming_content))
+
+    def test_hr_can_view_own_employer_photo_only(self):
+        self.client.force_login(self.hr)
+        response = self.client.get(
+            reverse("registry:protected_nurse_photo", args=[self.nurse.pk])
+        )
+        self.assertEqual(response.status_code, 200)
+
+        self.client.force_login(self.other_hr)
+        response = self.client.get(
+            reverse("registry:protected_nurse_photo", args=[self.nurse.pk])
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_path_traversal_is_rejected(self):
+        outside_dir = Path(tempfile.mkdtemp())
+        outside = outside_dir / "secret.txt"
+        outside.write_text("secret", encoding="utf-8")
+        try:
+            with self.assertRaises(Http404):
+                _serve_media(SimpleNamespace(path=str(outside)))
+        finally:
+            shutil.rmtree(outside_dir, ignore_errors=True)
+
+
+class RegistrationTests(RegistryTestBase):
+    def test_anonymous_is_redirected_to_login(self):
+        response = self.client.get(reverse("registry:register"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response["Location"])
+
+    def test_hr_cannot_open_or_submit_registration(self):
+        self.client.force_login(self.hr)
+        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 403)
+        response = self.client.post(
+            reverse("registry:register"),
+            self.registration_data(),
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_valid_registration_creates_pending_nurse_with_consent(self):
+        self.client.force_login(self.officer)
+        response = self.client.post(
+            reverse("registry:register"),
+            self.registration_data(),
+        )
+
+        nurse = Nurse.objects.get(full_name="New Nurse")
+        self.assertRedirects(
+            response,
+            reverse("registry:registration_success", args=[nurse.pk]),
+        )
+        self.assertEqual(nurse.record_status, Nurse.RecordStatus.PENDING)
+        self.assertEqual(nurse.created_by, self.officer)
+        self.assertIsNotNone(nurse.consent_at)
+        self.assertEqual(nurse.get_nin(), "12345678901")
+        self.assertTrue(nurse.photo)
+        self.assertEqual(nurse.documents.count(), 1)
+
+        success = self.client.get(
+            reverse("registry:registration_success", args=[nurse.pk])
+        )
+        self.assertContains(success, nurse.reference)
+        self.assertContains(success, "Pending")
+
+    def test_consent_is_required(self):
+        self.client.force_login(self.officer)
+        data = self.registration_data()
+        data.pop("consent")
+        response = self.client.post(reverse("registry:register"), data)
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Plateau State Nurse Registry")
-        self.assertContains(response, "Registration and licence verification")
+        self.assertContains(response, "consent before registering")
+        self.assertFalse(Nurse.objects.filter(full_name="New Nurse").exists())
 
-    def test_debug_defaults_to_false(self):
-        self.assertFalse(settings.DEBUG)
+    def test_duplicate_nin_warns_and_can_be_confirmed(self):
+        existing = self.create_nurse(nin="11111111111", licence_number="EXISTING-LIC")
+        self.client.force_login(self.officer)
+        data = self.registration_data(
+            nin="11111111111",
+            licence_number="NEW-LIC",
+        )
+
+        response = self.client.post(reverse("registry:register"), data)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Possible duplicate")
+        self.assertEqual(Nurse.objects.count(), 1)
+
+        data = self.registration_data(
+            nin="11111111111",
+            licence_number="NEW-LIC",
+            confirm_duplicate="on",
+        )
+        response = self.client.post(reverse("registry:register"), data)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Nurse.objects.count(), 2)
+        self.assertNotEqual(Nurse.objects.get(full_name="New Nurse").pk, existing.pk)
+
+    def test_duplicate_licence_number_warns(self):
+        self.create_nurse(nin="11111111111", licence_number="DUP-LIC")
+        self.client.force_login(self.officer)
+        response = self.client.post(
+            reverse("registry:register"),
+            self.registration_data(nin="22222222222", licence_number="dup-lic"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Possible duplicate")
+        self.assertContains(response, "licence number")
+
+    def test_no_duplicate_does_not_warn(self):
+        self.client.force_login(self.officer)
+        response = self.client.post(
+            reverse("registry:register"),
+            self.registration_data(nin="33333333333", licence_number="UNIQUE-LIC"),
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Possible duplicate")
+
+
+class UploadValidationTests(RegistryTestBase):
+    def test_pdf_jpg_and_png_are_accepted(self):
+        uploads = [
+            pdf_upload(),
+            image_upload("scan.jpg"),
+            png_upload(),
+        ]
+        for upload in uploads:
+            with self.subTest(name=upload.name):
+                self.assertIs(_validate_upload(upload, "Scan", allow_pdf=True), upload)
+
+    def test_invalid_pdf_header_is_rejected(self):
+        upload = SimpleUploadedFile(
+            "scan.pdf",
+            b"not a pdf",
+            content_type="application/pdf",
+        )
+        with self.assertRaisesMessage(Exception, "not a valid PDF"):
+            _validate_upload(upload, "Scan", allow_pdf=True)
+
+    def test_oversized_upload_is_rejected(self):
+        upload = pdf_upload(extra=b"0" * (MAX_UPLOAD_SIZE + 1))
+        with self.assertRaisesMessage(Exception, "10 MB or smaller"):
+            _validate_upload(upload, "Scan", allow_pdf=True)
+
+    def test_unsupported_extension_is_rejected(self):
+        upload = SimpleUploadedFile(
+            "scan.exe",
+            b"MZ",
+            content_type="application/octet-stream",
+        )
+        with self.assertRaisesMessage(Exception, "must be one of"):
+            _validate_upload(upload, "Scan", allow_pdf=True)
+
+    def test_invalid_image_is_rejected(self):
+        upload = SimpleUploadedFile("selfie.jpg", b"not an image", content_type="image/jpeg")
+        with self.assertRaisesMessage(Exception, "not a valid image"):
+            _validate_upload(upload, "Selfie", allow_pdf=False)
+
+    def test_registration_page_has_camera_and_fallback(self):
+        self.client.force_login(self.officer)
+        response = self.client.get(reverse("registry:register"))
+        self.assertContains(response, "getUserMedia")
+        self.assertContains(response, "capture")
+        self.assertContains(response, 'type="file"')
+
+    def test_oversized_scan_shows_field_error(self):
+        self.client.force_login(self.officer)
+        data = self.registration_data(
+            licence_scan=pdf_upload(extra=b"0" * (MAX_UPLOAD_SIZE + 1))
+        )
+        response = self.client.post(reverse("registry:register"), data)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "10 MB or smaller")
+        self.assertFalse(Nurse.objects.filter(full_name="New Nurse").exists())
+
+
+class AdminTests(RegistryTestBase):
+    def test_superuser_can_open_admin_and_models_are_registered(self):
+        self.client.force_login(self.super_admin)
+        response = self.client.get(reverse("admin:index"))
+        self.assertEqual(response.status_code, 200)
+        for model in (Employer, Nurse, LicenceDocument, Flag, Notification):
+            self.assertIn(model, admin.site._registry)
+
+    def test_non_staff_user_is_denied_admin(self):
+        self.client.force_login(self.no_group)
+        response = self.client.get(reverse("admin:index"))
+        self.assertEqual(response.status_code, 302)
+
+    def test_duplicate_marker_and_preview(self):
+        first = self.create_nurse(
+            nin="11111111111",
+            licence_number="DUP-LIC",
+            nanm_id="PLT-NUR-000001",
+            record_status=Nurse.RecordStatus.APPROVED,
+        )
+        second = self.create_nurse(
+            nin="11111111111",
+            licence_number="OTHER-LIC",
+            nanm_id="PLT-NUR-000002",
+            record_status=Nurse.RecordStatus.APPROVED,
+        )
+        document = LicenceDocument.objects.create(nurse=first, file=pdf_upload())
+
+        nurse_admin = admin.site._registry[Nurse]
+        document_admin = admin.site._registry[LicenceDocument]
+        self.assertTrue(nurse_admin.possible_duplicate(second))
+        self.assertIn(
+            reverse("registry:protected_document", args=[document.pk]),
+            str(document_admin.preview(document)),
+        )
+
+    def test_nin_and_status_are_read_only_in_admin(self):
+        nurse_admin = admin.site._registry[Nurse]
+        self.assertIn("nin_last4", nurse_admin.readonly_fields)
+        self.assertIn("record_status", nurse_admin.readonly_fields)
+
+
+class SeedDemoTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._media_root = tempfile.mkdtemp()
+        cls._media_override = override_settings(
+            MEDIA_ROOT=cls._media_root,
+            NIN_ENCRYPTION_KEY=TEST_KEY,
+        )
+        cls._media_override.enable()
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        cls._media_override.disable()
+        shutil.rmtree(cls._media_root, ignore_errors=True)
+
+    def test_seed_creates_expected_demo_data(self):
+        output = StringIO()
+        call_command("seed_demo", stdout=output)
+
+        self.assertEqual(Employer.objects.count(), 4)
+        self.assertEqual(Nurse.objects.count(), 60)
+        self.assertEqual(User.objects.filter(username__startswith="demo_").count(), 6)
+        self.assertEqual(User.objects.filter(groups__name=OFFICER).count(), 2)
+        self.assertEqual(User.objects.filter(groups__name=HR).count(), 2)
+
+        statuses = set(Nurse.objects.values_list("record_status", flat=True))
+        self.assertTrue(
+            {
+                Nurse.RecordStatus.APPROVED,
+                Nurse.RecordStatus.PENDING,
+                Nurse.RecordStatus.FLAGGED,
+                Nurse.RecordStatus.SUSPENDED,
+                Nurse.RecordStatus.REVOKED,
+            }.issubset(statuses)
+        )
+        today = timezone.localdate()
+        self.assertTrue(Nurse.objects.filter(licence_expiry__gt=today + timedelta(days=180)).exists())
+        self.assertTrue(
+            Nurse.objects.filter(
+                licence_expiry__lte=today + timedelta(days=180),
+                licence_expiry__gte=today,
+            ).exists()
+        )
+        self.assertTrue(Nurse.objects.filter(licence_expiry__lt=today).exists())
+        self.assertTrue(all(nurse.photo for nurse in Nurse.objects.all()))
+        self.assertTrue(all(document.file for document in LicenceDocument.objects.all()))
+        self.assertIn("demo_officer1 / DemoPass123!", output.getvalue())
+
+    def test_seed_refuses_non_empty_database_without_reset(self):
+        call_command("seed_demo", stdout=StringIO())
+        with self.assertRaises(CommandError):
+            call_command("seed_demo", stdout=StringIO())
+
+    def test_seed_reset_replaces_demo_data(self):
+        call_command("seed_demo", stdout=StringIO())
+        call_command("seed_demo", "--reset", stdout=StringIO())
+        self.assertEqual(Nurse.objects.count(), 60)
+        self.assertEqual(Employer.objects.count(), 4)
