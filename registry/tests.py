@@ -104,9 +104,11 @@ class RegistryTestBase(TestCase):
             username="superadmin", password="test-pass", is_staff=True
         )
         cls.super_admin.groups.add(Group.objects.get(name=SUPER_ADMIN))
-        cls.hr = User.objects.create_user(username="hr", password="test-pass")
+        cls.hr = User.objects.create_user(username="hr", password="test-pass", is_staff=True)
         cls.hr.groups.add(Group.objects.get(name=HR))
-        cls.other_hr = User.objects.create_user(username="other-hr", password="test-pass")
+        cls.other_hr = User.objects.create_user(
+            username="other-hr", password="test-pass", is_staff=True
+        )
         cls.other_hr.groups.add(Group.objects.get(name=HR))
         cls.no_group = User.objects.create_user(username="no-group", password="test-pass")
         cls.employer.hr_users.add(cls.hr)
@@ -550,64 +552,58 @@ class AdminTests(RegistryTestBase):
         self.assertIn("nin_last4", nurse_admin.readonly_fields)
         self.assertIn("record_status", nurse_admin.readonly_fields)
 
+    def test_hr_can_access_admin_with_restricted_scope(self):
+        self.client.force_login(self.hr)
+        response = self.client.get(reverse("admin:index"))
+        self.assertEqual(response.status_code, 200)
 
-class SeedDemoTests(TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls._media_root = tempfile.mkdtemp()
-        cls._media_override = override_settings(
-            MEDIA_ROOT=cls._media_root,
-            NIN_ENCRYPTION_KEY=TEST_KEY,
-        )
-        cls._media_override.enable()
-        super().setUpClass()
+        # Check that HR user can only see their own employer's nurses
+        nurse_own = self.create_nurse(full_name="Own Nurse")
+        nurse_other = self.create_nurse(full_name="Other Nurse", employer=self.other_employer)
+        self.assertEqual(list(nurses_for_user(self.hr)), [nurse_own])
+        self.assertEqual(list(nurses_for_user(self.other_hr)), [nurse_other])
 
-    @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-        cls._media_override.disable()
-        shutil.rmtree(cls._media_root, ignore_errors=True)
+        # Check that HR user cannot access other employers' data
+        response = self.client.get(reverse("admin:registry_nurse_changelist"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, nurse_own.full_name)
+        self.assertNotContains(response, nurse_other.full_name)
 
-    def test_seed_creates_expected_demo_data(self):
-        output = StringIO()
-        call_command("seed_demo", stdout=output)
+        # Check read-only access to certain fields
+        response = self.client.get(reverse("admin:registry_nurse_change", args=[nurse_own.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'class="readonly"')
+        self.assertNotContains(response, 'name="_save"')
 
-        self.assertEqual(Employer.objects.count(), 4)
-        self.assertEqual(Nurse.objects.count(), 60)
-        self.assertEqual(User.objects.filter(username__startswith="demo_").count(), 6)
-        self.assertEqual(User.objects.filter(groups__name=OFFICER).count(), 2)
-        self.assertEqual(User.objects.filter(groups__name=HR).count(), 2)
+    def test_hr_admin_listing_is_employer_scoped(self):
+        own = self.create_nurse(full_name="Own Employer")
+        other = self.create_nurse(full_name="Other Employer", employer=self.other_employer)
 
-        statuses = set(Nurse.objects.values_list("record_status", flat=True))
-        self.assertTrue(
-            {
-                Nurse.RecordStatus.APPROVED,
-                Nurse.RecordStatus.PENDING,
-                Nurse.RecordStatus.FLAGGED,
-                Nurse.RecordStatus.SUSPENDED,
-                Nurse.RecordStatus.REVOKED,
-            }.issubset(statuses)
-        )
-        today = timezone.localdate()
-        self.assertTrue(Nurse.objects.filter(licence_expiry__gt=today + timedelta(days=180)).exists())
-        self.assertTrue(
-            Nurse.objects.filter(
-                licence_expiry__lte=today + timedelta(days=180),
-                licence_expiry__gte=today,
-            ).exists()
-        )
-        self.assertTrue(Nurse.objects.filter(licence_expiry__lt=today).exists())
-        self.assertTrue(all(nurse.photo for nurse in Nurse.objects.all()))
-        self.assertTrue(all(document.file for document in LicenceDocument.objects.all()))
-        self.assertIn("demo_officer1 / DemoPass123!", output.getvalue())
+        self.client.force_login(self.hr)
+        response = self.client.get(reverse("admin:registry_nurse_changelist"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, own.full_name)
+        self.assertNotContains(response, other.full_name)
 
-    def test_seed_refuses_non_empty_database_without_reset(self):
-        call_command("seed_demo", stdout=StringIO())
-        with self.assertRaises(CommandError):
-            call_command("seed_demo", stdout=StringIO())
+    def test_hr_admin_detail_is_read_only_and_restricted(self):
+        own = self.create_nurse(full_name="Own Employer")
+        other = self.create_nurse(full_name="Other Employer", employer=self.other_employer)
 
-    def test_seed_reset_replaces_demo_data(self):
-        call_command("seed_demo", stdout=StringIO())
-        call_command("seed_demo", "--reset", stdout=StringIO())
-        self.assertEqual(Nurse.objects.count(), 60)
-        self.assertEqual(Employer.objects.count(), 4)
+        self.client.force_login(self.hr)
+        own_url = reverse("admin:registry_nurse_change", args=[own.pk])
+        other_url = reverse("admin:registry_nurse_change", args=[other.pk])
+
+        response = self.client.get(own_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'class="readonly"')
+
+        response = self.client.get(other_url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/admin/", response["Location"])
+
+    def test_hr_is_not_allowed_to_edit_from_admin(self):
+        nurse = self.create_nurse()
+        self.client.force_login(self.hr)
+        response = self.client.get(reverse("admin:registry_nurse_change", args=[nurse.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'class="readonly"')

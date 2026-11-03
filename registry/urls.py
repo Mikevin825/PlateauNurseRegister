@@ -20,6 +20,10 @@ urlpatterns = [
     ),
     path("verify/", views.verify, name="verify"),
     path("verify/<str:nanm_id>/", views.verify_result, name="verify_result"),
+    path("verify/<str:nanm_id>/photo/", views.public_nurse_photo, name="public_nurse_photo"),
+    path("verify/<str:nanm_id>/qr/", views.nurse_qr, name="nurse_qr"),
     path("nurses/<int:pk>/card/", views.card, name="card"),
+    path("nurses/<int:pk>/approval/", views.approval_confirmation, name="approval_confirmation"),
+    path("nurses/<int:pk>/email-card/", views.email_card_link, name="email_card_link"),
     path("card/<str:token>/", views.signed_card, name="signed_card"),
 ]

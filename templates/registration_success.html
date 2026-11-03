@@ -7,5 +7,5 @@
 <p>Reference: <strong>{{ nurse.reference }}</strong></p>
 <p>Status: <strong>{{ nurse.get_record_status_display }}</strong></p>
 <p>The record is waiting for review. Keep this reference for follow-up.</p>
-<p><a href="{{ url('registry:home') }}">Return home</a></p>
+<p><a href="{% url 'registry:home' %}">Return home</a></p>
 {% endblock %}

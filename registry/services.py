@@ -2,7 +2,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from .permissions import can_reveal_nin, is_officer_or_above
+from .permissions import can_reveal_nin, is_hr, is_officer_or_above
 
 
 def reveal_nin(actor, nurse):
@@ -144,6 +144,25 @@ def flag_nurse(actor, nurse_pk, reason):
     from .models import Nurse
     nurse = Nurse.objects.get(pk=nurse_pk)
     return transition_nurse(actor, nurse, "flagged", reason)
+
+
+def confirm_employment(actor, nurse_pk):
+    """Record that an HR user confirmed a nurse works for their employer."""
+    from .models import Nurse
+
+    if not is_hr(actor):
+        raise PermissionDenied("Only HR users can confirm employer details.")
+
+    with transaction.atomic():
+        nurse = Nurse.objects.select_for_update().get(pk=nurse_pk)
+        if not nurse.employer_id or not nurse.employer.hr_users.filter(pk=actor.pk).exists():
+            raise PermissionDenied("You may only confirm nurses from your employer.")
+
+        nurse.employer_confirmed_at = timezone.now()
+        nurse.employer_confirmed_by = actor
+        nurse.save(update_fields=["employer_confirmed_at", "employer_confirmed_by", "updated_at"])
+
+    return nurse
 
 
 def _next_nanm_id():

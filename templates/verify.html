@@ -1,24 +1,31 @@
 {% extends "base.html" %}
 {% block title %}Verify Nurse{% endblock %}
 {% block content %}
-  <h1>Verify Nurse</h1>
-  {% if not_registered %}
-    <p>Not registered</p>
-  {% else %}
-    <p><strong>Name:</strong> {{ full_name }}</p>
-    <p><strong>NANNM ID:</strong> {{ nanm_id }}</p>
-    <p><strong>Licence status:</strong> {{ status }}</p>
-    <p><strong>Expiry:</strong> {{ licence_expiry }}</p>
-    <p><strong>Employer:</strong> {{ employer }}</p>
-    {% if photo_url %}
-      <img src="{{ photo_url }}" alt="Nurse photo" style="max-width:200px;">
-    {% else %}
-      <p>No photo available.</p>
+  <section class="verify-shell">
+    <h1>Verify Nurse</h1>
+
+    {% if not_registered %}
+      <div class="alert">Not registered</div>
+    {% elif nurse %}
+      <div class="verify-card">
+        <h2>{{ full_name }}</h2>
+        <p><strong>NANNM ID:</strong> {{ nanm_id }}</p>
+        <p><strong>Licence status:</strong> {{ status }}</p>
+        <p><strong>Expiry:</strong> {{ licence_expiry }}</p>
+        <p><strong>Employer:</strong> {{ employer }}</p>
+        {% if photo_url %}
+          <img src="{{ photo_url }}" alt="Nurse photo" class="nurse-photo">
+        {% else %}
+          <p>No photo available.</p>
+        {% endif %}
+      </div>
     {% endif %}
-  {% endif %}
-  <hr>
-  <form method="get">
-    <input type="text" name="nanm_id" placeholder="NANNM ID">
-    <button type="submit">Verify</button>
-  </form>
+
+    <form method="get" action="{% url 'registry:verify' %}" class="verify-form">
+      <label for="nanm_id">NANNM ID</label>
+      <input type="text" name="nanm_id" id="nanm_id" placeholder="e.g. PLT-NUR-000001" required>
+      <input type="text" name="website" class="honeypot" tabindex="-1" autocomplete="off">
+      <button type="submit">Verify</button>
+    </form>
+  </section>
 {% endblock %}

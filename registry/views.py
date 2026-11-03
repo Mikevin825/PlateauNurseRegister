@@ -1,15 +1,18 @@
 import mimetypes
+from io import BytesIO
 from pathlib import Path
 
-from django.views.decorators.csrf import csrf_exempt
+import qrcode
 from django.conf import settings
+from django.contrib.auth.decorators import login_required
 from django.core import signing
 from django.core.exceptions import PermissionDenied
-from django.http import FileResponse, Http404, HttpResponseBadRequest
+from django.http import FileResponse, Http404, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
-from django.contrib.auth.decorators import login_required
+from django.urls import reverse
+from django.views.decorators.csrf import csrf_exempt
 from django.db import transaction
-from io import BytesIO
+from django_ratelimit.decorators import ratelimit
 
 from .forms import NurseRegistrationForm
 from .models import LicenceDocument, Nurse
@@ -18,6 +21,14 @@ from .permissions import (
     can_view_nurse_photo,
     is_officer_or_above,
 )
+
+
+def public_verify_rate(request, group=None):
+    return settings.PUBLIC_VERIFY_RATE
+
+
+def ratelimited(request, exception=None):
+    return HttpResponse("Too many requests. Try again later.", status=429)
 
 
 def home(request):
@@ -93,90 +104,169 @@ def _serve_media(field_file):
     return FileResponse(path.open("rb"), content_type=content_type)
 
 
-from django.views.decorators.csrf import csrf_exempt
-
 @csrf_exempt
+@ratelimit(key="ip", rate=public_verify_rate, method=["GET", "POST"], block=True)
 def verify(request):
     """Public verification page."""
-    nanm_id = request.GET.get("nanm_id", "").strip()
+    if request.method == "POST":
+        website = request.POST.get("website", "").strip()
+        if website:
+            return HttpResponseBadRequest("Bad request")
+
+    nanm_id = (request.GET.get("nanm_id") or request.POST.get("nanm_id") or "").strip()
     if not nanm_id:
         return render(request, "verify.html")
     nurse = Nurse.objects.select_related("employer").filter(nanm_id=nanm_id).first()
     if not nurse:
         return render(request, "verify.html", {"not_registered": True})
-    # Build public status using the model property
-    status = nurse.public_licence_status
-    # Photo URL: if photo exists, build absolute URL; otherwise use placeholder
-    photo_url = ""
-    if nurse.photo:
-        try:
-            photo_url = request.build_absolute_uri(nurse.photo.url)
-        except Exception:
-            photo_url = ""
-    ctx = {
-        "nurse": nurse,
-        "status": status,
-        "nanm_id": nurse.nanm_id,
-        "full_name": nurse.full_name,
-        "licence_expiry": nurse.licence_expiry,
-        "employer": nurse.employer.name if nurse.employer else "",
-        "photo_url": photo_url,
-    }
-    return render(request, "verify.html", ctx)
+
+    return render(
+        request,
+        "verify.html",
+        {
+            "nurse": nurse,
+            "status": nurse.public_licence_status,
+            "nanm_id": nurse.nanm_id,
+            "full_name": nurse.full_name,
+            "licence_expiry": nurse.licence_expiry,
+            "employer": nurse.employer.name if nurse.employer else "",
+            "photo_url": request.build_absolute_uri(nurse.photo.url) if nurse.photo else "",
+        },
+    )
 
 
+@ratelimit(key="ip", rate=public_verify_rate, method=["GET", "POST"], block=True)
 def verify_result(request, nanm_id):
     """Show verification result for a given NANNM ID."""
     nurse = Nurse.objects.select_related("employer").filter(nanm_id=nanm_id).first()
     if not nurse:
         return render(request, "verify.html", {"not_registered": True})
-    # Build public status using the model property
-    status = nurse.public_licence_status
-    # Photo URL: if photo exists, build absolute URL; otherwise use placeholder
-    photo_url = ""
-    if nurse.photo:
-        try:
-            photo_url = request.build_absolute_uri(nurse.photo.url)
-        except Exception:
-            photo_url = ""
-    ctx = {
-        "nurse": nurse,
-        "status": status,
-        "nanm_id": nurse.nanm_id,
-        "full_name": nurse.full_name,
-        "licence_expiry": nurse.licence_expiry,
-        "employer": nurse.employer.name if nurse.employer else "",
-        "photo_url": photo_url,
-    }
-    return render(request, "verify.html", ctx)
+
+    return render(
+        request,
+        "verify.html",
+        {
+            "nurse": nurse,
+            "status": nurse.public_licence_status,
+            "nanm_id": nurse.nanm_id,
+            "full_name": nurse.full_name,
+            "licence_expiry": nurse.licence_expiry,
+            "employer": nurse.employer.name if nurse.employer else "",
+            "photo_url": request.build_absolute_uri(nurse.photo.url) if nurse.photo else "",
+        },
+    )
+
+
+@ratelimit(key="ip", rate=public_verify_rate, method=["GET", "POST"], block=True)
+def public_nurse_photo(request, nanm_id):
+    nurse = Nurse.objects.filter(nanm_id=nanm_id).first()
+    if not nurse or not nurse.photo:
+        raise Http404
+    return _serve_media(nurse.photo)
+
+
+@ratelimit(key="ip", rate=public_verify_rate, method=["GET", "POST"], block=True)
+def nurse_qr(request, nanm_id):
+    nurse = Nurse.objects.filter(nanm_id=nanm_id).first()
+    if not nurse or not nurse.nanm_id:
+        raise Http404
+
+    qr_url = f"{settings.PUBLIC_BASE_URL.rstrip('/')}/verify/{nurse.nanm_id}/"
+    image = qrcode.make(qr_url)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    response = HttpResponse(buffer.getvalue(), content_type="image/png")
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@login_required
+def approval_confirmation(request, pk):
+    if not is_officer_or_above(request.user):
+        raise PermissionDenied
+
+    nurse = get_object_or_404(Nurse, pk=pk)
+    if nurse.record_status != Nurse.RecordStatus.APPROVED or not nurse.nanm_id:
+        raise Http404
+
+    direct_url = request.build_absolute_uri(reverse("registry:card", args=[nurse.pk]))
+    signed_url = request.build_absolute_uri(
+        reverse("registry:signed_card", args=[signing.dumps({"nurse_id": nurse.pk}, salt=settings.CARD_LINK_SALT)])
+    )
+    return render(
+        request,
+        "approval_confirmation.html",
+        {
+            "nurse": nurse,
+            "direct_url": direct_url,
+            "signed_url": signed_url,
+        },
+    )
+
+
+@login_required
+@csrf_exempt
+def email_card_link(request, pk):
+    if not is_officer_or_above(request.user):
+        raise PermissionDenied
+
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+
+    nurse = get_object_or_404(Nurse, pk=pk)
+    if nurse.record_status != Nurse.RecordStatus.APPROVED or not nurse.nanm_id:
+        raise Http404
+
+    token = signing.dumps({"nurse_id": nurse.pk}, salt=settings.CARD_LINK_SALT)
+    signed_url = request.build_absolute_uri(reverse("registry:signed_card", args=[token]))
+    send_mail = __import__("django.core.mail", fromlist=["send_mail"]).send_mail
+    send_mail(
+        "Nurse card link",
+        f"Open the following card link: {signed_url}",
+        settings.DEFAULT_FROM_EMAIL,
+        [nurse.email],
+        fail_silently=True,
+    )
+    return redirect("registry:approval_confirmation", pk=nurse.pk)
 
 
 @login_required
 def card(request, pk):
-    nurse = get_object_or_404(Nurse, pk=pk)
-    # generate signed link
+    if not is_officer_or_above(request.user):
+        raise PermissionDenied
+
+    nurse = get_object_or_404(Nurse.objects.select_related("employer"), pk=pk)
     token = signing.dumps({"nurse_id": nurse.pk}, salt=settings.CARD_LINK_SALT)
     signed_url = request.build_absolute_uri(reverse("registry:signed_card", args=[token]))
-    # direct URL (requires login)
     direct_url = reverse("registry:card", args=[pk])
     ctx = {
         "nurse": nurse,
+        "signed": False,
         "signed_url": signed_url,
         "direct_url": direct_url,
+        "qr_url": request.build_absolute_uri(reverse("registry:nurse_qr", args=[nurse.nanm_id])) if nurse.nanm_id else "",
     }
     return render(request, "card.html", ctx)
 
 
 def signed_card(request, token):
     try:
-        data = signing.loads(token, salt=settings.CARD_LINK_SALT, max_age=settings.CARD_LINK_MAX_AGE)
-        nurse_id = data["nurse_id"]
-        nurse = get_object_or_404(Nurse, pk=nurse_id)
-        # render same card view without login requirement
-        ctx = {
-            "nurse": nurse,
-            "signed": True,
-        }
-        return render(request, "card.html", ctx)
+        data = signing.loads(
+            token,
+            salt=settings.CARD_LINK_SALT,
+            max_age=settings.CARD_LINK_MAX_AGE,
+        )
+        nurse = get_object_or_404(Nurse.objects.select_related("employer"), pk=data["nurse_id"])
+        return render(
+            request,
+            "card.html",
+            {
+                "nurse": nurse,
+                "signed": True,
+                "signed_url": request.build_absolute_uri(reverse("registry:signed_card", args=[token])),
+                "direct_url": request.build_absolute_uri(reverse("registry:card", args=[nurse.pk])),
+                "qr_url": request.build_absolute_uri(reverse("registry:nurse_qr", args=[nurse.nanm_id])) if nurse.nanm_id else "",
+            },
+        )
     except Exception:
         return render(request, "card_invalid.html", status=400)
