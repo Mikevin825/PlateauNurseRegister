@@ -4,23 +4,31 @@ from pathlib import Path
 
 import qrcode
 from django.conf import settings
+from django.contrib import messages
+from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.models import Group
 from django.core import signing
 from django.core.exceptions import PermissionDenied
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.db import transaction
 from django_ratelimit.decorators import ratelimit
 
-from .forms import NurseRegistrationForm
-from .models import LicenceDocument, Nurse
+from .forms import HRRegistrationForm, NurseRegistrationForm
+from .models import Employer, HRRegistrationRequest, LicenceDocument, Nurse
 from .permissions import (
+    HR,
     can_view_documents,
     can_view_nurse_photo,
     is_officer_or_above,
+    is_super_admin,
 )
+
+User = get_user_model()
 
 
 def public_verify_rate(request, group=None):
@@ -270,3 +278,69 @@ def signed_card(request, token):
         )
     except Exception:
         return render(request, "card_invalid.html", status=400)
+
+
+def hr_registration(request):
+    if request.user.is_authenticated:
+        if not is_super_admin(request.user):
+            return redirect("admin:index")
+    if request.method == "POST":
+        form = HRRegistrationForm(request.POST)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Your HR registration has been submitted for super-admin review.")
+            return redirect("registry:home")
+    else:
+        form = HRRegistrationForm()
+    return render(request, "hr_registration.html", {"form": form})
+
+
+@login_required
+def approve_hr_registration(request, pk):
+    if not is_super_admin(request.user):
+        raise PermissionDenied
+
+    registration = get_object_or_404(HRRegistrationRequest, pk=pk)
+    if request.method == "POST":
+        action = request.POST.get("action")
+        if action == "approve":
+            with transaction.atomic():
+                employer, _ = Employer.objects.get_or_create(
+                    name=registration.hospital_name,
+                    defaults={
+                        "type": registration.employer_type,
+                        "lga": registration.lga,
+                        "contact_email": registration.contact_email,
+                        "approved": True,
+                    },
+                )
+                user, created = User.objects.get_or_create(
+                    username=registration.email.split("@", 1)[0],
+                    defaults={
+                        "email": registration.email,
+                        "is_staff": True,
+                        "password": registration.password,
+                    },
+                )
+                user.email = registration.email
+                user.set_password(registration.password)
+                user.is_staff = True
+                user.save()
+                user.groups.add(Group.objects.get(name=HR))
+                employer.hr_users.add(user)
+                registration.status = HRRegistrationRequest.Status.APPROVED
+                registration.reviewed_by = request.user
+                registration.reviewed_at = timezone.now()
+                registration.save(update_fields=["status", "reviewed_by", "reviewed_at", "updated_at"])
+            messages.success(request, f"HR account for {registration.email} approved and activated.")
+            return redirect("admin:registry_hrregistrationrequest_changelist")
+        if action == "reject":
+            reason = (request.POST.get("reason") or "").strip()
+            registration.status = HRRegistrationRequest.Status.REJECTED
+            registration.reviewed_by = request.user
+            registration.reviewed_at = timezone.now()
+            registration.reason = reason or "No reason provided"
+            registration.save(update_fields=["status", "reviewed_by", "reviewed_at", "reason", "updated_at"])
+            messages.success(request, f"HR registration for {registration.email} rejected.")
+            return redirect("admin:registry_hrregistrationrequest_changelist")
+    return render(request, "admin_hr_registration_review.html", {"registration": registration})

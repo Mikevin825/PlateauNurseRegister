@@ -1,0 +1,9 @@
+Dear {{ nurse.full_name }},
+
+This is a reminder that your nursing licence will expire on {{ nurse.licence_expiry }}.
+There are {{ days_remaining }} days remaining before expiry.
+
+Please ensure your renewal details are updated with the relevant authority and, if needed, upload the renewed licence for review.
+
+Regards,
+Plateau State Nurse Registry

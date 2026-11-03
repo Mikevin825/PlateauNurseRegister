@@ -28,12 +28,23 @@ Open `http://127.0.0.1:8000/` and sign in at `/admin/`.
 python manage.py seed_demo --reset
 ```
 
-Demo accounts all use password `DemoPass123!`:
+## Demo admin credentials
 
-- `demo_officer1`, `demo_officer2`
+Use the following demo accounts for the local admin dashboard. All share the same password: `DemoPass123!`
+
+### Non-superadmin admins
+
+- `demo_officer1`
+- `demo_officer2`
 - `demo_supervisor`
+- `demo_hr1`
+- `demo_hr2`
+
+### Superadmin
+
 - `demo_superadmin`
-- `demo_hr1`, `demo_hr2`
+
+Sign in at `http://127.0.0.1:8000/admin/`.
 
 ## Checks
 

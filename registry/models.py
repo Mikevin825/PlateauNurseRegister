@@ -147,6 +147,50 @@ class Nurse(models.Model):
         super().save(*args, **kwargs)
 
     @property
+    def licence_status_level(self):
+        """Return a normalized internal state for UI and filtering: green, yellow, red, grey, black."""
+        from django.utils import timezone
+
+        today = timezone.localdate()
+        if self.record_status == self.RecordStatus.PENDING:
+            return "grey"
+        if self.record_status == self.RecordStatus.REJECTED:
+            return "grey"
+        if self.record_status == self.RecordStatus.FLAGGED:
+            return "black"
+        if self.record_status == self.RecordStatus.SUSPENDED:
+            return "red"
+        if self.record_status == self.RecordStatus.REVOKED:
+            return "black"
+        if self.licence_expiry < today:
+            return "red"
+        if (self.licence_expiry - today).days <= settings.LICENCE_EXPIRY_WARNING_DAYS:
+            return "yellow"
+        return "green"
+
+    @property
+    def licence_status_band(self):
+        """Return a normalized status band: green / yellow / red / grey / black."""
+        from django.utils import timezone
+
+        today = timezone.localdate()
+        if self.record_status == "pending":
+            return "grey"
+        if self.record_status == "rejected":
+            return "grey"
+        if self.record_status == "flagged":
+            return "black"
+        if self.record_status in {"suspended", "revoked"}:
+            return "red"
+        if self.record_status != "approved":
+            return "grey"
+        if self.licence_expiry < today:
+            return "red"
+        if (self.licence_expiry - today).days <= settings.LICENCE_EXPIRY_WARNING_DAYS:
+            return "yellow"
+        return "green"
+
+    @property
     def public_licence_status(self):
         from django.utils import timezone
 
@@ -261,3 +305,35 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"{self.get_type_display()} for {self.nurse}"
+
+
+class HRRegistrationRequest(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    email = models.EmailField(unique=True)
+    hospital_name = models.CharField(max_length=255)
+    employer_type = models.CharField(max_length=32, choices=Employer.Type.choices, default=Employer.Type.HOSPITAL)
+    lga = models.CharField(max_length=120)
+    contact_email = models.EmailField(blank=True)
+    password = models.CharField(max_length=128)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_hr_registrations",
+        null=True,
+        blank=True,
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.email} ({self.status})"

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}HR Registration · Plateau State Nurse Registry{% endblock %}
+
+{% block content %}
+<h1>HR registration</h1>
+<p>Submit your hospital details for super-admin review. Your account will be activated only after approval.</p>
+
+<form method="post" class="card-form">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    {% for field in form %}
+        <div class="field">
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}
+            {% for error in field.errors %}
+                <div class="error">{{ error }}</div>
+            {% endfor %}
+        </div>
+    {% endfor %}
+    <button type="submit">Submit for review</button>
+</form>
+{% endblock %}

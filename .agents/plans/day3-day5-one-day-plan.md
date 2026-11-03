@@ -35,6 +35,14 @@ so that the system can be demonstrated and used in a single-day delivery window.
 - PNR-26: Demo script, README, backup and reset
 - PNR-28: Smoke test suite and bug-fix pass
 
+### ✅ Day 2 COMPLETE (PNR-11 to PNR-16)
+- PNR-11: Review actions and state transitions - DONE
+- PNR-12: NANNM ID generation and QR endpoint - DONE
+- PNR-13: Printable ID card - DONE
+- PNR-14: Approval confirmation and signed card link - DONE
+- PNR-15: Public verification page and API - DONE
+- PNR-16: Public rate limiting and anti-enumeration - DONE
+
 ### Defer if time is short
 - PNR-19: Renewal upload and approval
 - PNR-27: Demo data polish and demo-mode banner

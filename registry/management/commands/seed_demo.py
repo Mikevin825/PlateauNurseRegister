@@ -21,6 +21,13 @@ DEMO_USERNAMES = {
     "demo_hr1",
     "demo_hr2",
 }
+DEMO_ADMIN_USERNAMES = [
+    "demo_officer1",
+    "demo_officer2",
+    "demo_supervisor",
+    "demo_hr1",
+    "demo_hr2",
+]
 DEMO_EMPLOYERS = {
     "Plateau Specialist Hospital": ("hospital", "Jos North"),
     "Bingham University Teaching Hospital": ("hospital", "Jos North"),
@@ -127,9 +134,11 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS("Demo data created."))
         self.stdout.write("")
-        self.stdout.write("Demo accounts:")
-        for username in sorted(DEMO_USERNAMES):
+        self.stdout.write("Demo admin accounts (excluding superadmin):")
+        for username in DEMO_ADMIN_USERNAMES:
             self.stdout.write(f"  {username} / {DEMO_PASSWORD}")
+        self.stdout.write("")
+        self.stdout.write(f"Superadmin: demo_superadmin / {DEMO_PASSWORD}")
         self.stdout.write("")
         self.stdout.write(
             f"Nurses: {Nurse.objects.count()} | Employers: {Employer.objects.count()}"

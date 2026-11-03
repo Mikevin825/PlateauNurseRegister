@@ -7,7 +7,7 @@ from django.utils import timezone
 from PIL import Image, UnidentifiedImageError
 
 from .crypto import hash_nin
-from .models import Employer, Nurse
+from .models import Employer, Nurse, HRRegistrationRequest
 
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024
 ALLOWED_SCAN_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
@@ -192,3 +192,50 @@ class NurseRegistrationForm(forms.ModelForm):
         if commit:
             nurse.save()
         return nurse
+
+
+class HRRegistrationForm(forms.Form):
+    email = forms.EmailField(
+        label="Work email",
+        widget=forms.EmailInput(attrs={"placeholder": "name@hospital.org"}),
+    )
+    hospital_name = forms.CharField(
+        label="Hospital / employer name",
+        max_length=255,
+        widget=forms.TextInput(attrs={"placeholder": "e.g. Plateau Specialist Hospital"}),
+    )
+    employer_type = forms.ChoiceField(
+        label="Hospital type",
+        choices=Employer.Type.choices,
+    )
+    lga = forms.CharField(
+        label="Local government area",
+        max_length=120,
+        widget=forms.TextInput(attrs={"placeholder": "e.g. Jos North"}),
+    )
+    contact_email = forms.EmailField(
+        label="Hospital contact email",
+        required=False,
+        widget=forms.EmailInput(attrs={"placeholder": "contact@hospital.org"}),
+    )
+    password = forms.CharField(
+        label="Password",
+        strip=False,
+        widget=forms.PasswordInput(attrs={"autocomplete": "new-password"}),
+    )
+
+    def clean_email(self):
+        email = (self.cleaned_data.get("email") or "").strip().lower()
+        if HRRegistrationRequest.objects.filter(email__iexact=email).exists():
+            raise ValidationError("An HR registration already exists for this email.")
+        return email
+
+    def save(self):
+        return HRRegistrationRequest.objects.create(
+            email=self.cleaned_data["email"],
+            hospital_name=self.cleaned_data["hospital_name"].strip(),
+            employer_type=self.cleaned_data["employer_type"],
+            lga=self.cleaned_data["lga"].strip(),
+            contact_email=(self.cleaned_data.get("contact_email") or "").strip(),
+            password=self.cleaned_data["password"],
+        )

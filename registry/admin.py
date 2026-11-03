@@ -1,10 +1,12 @@
 from django.contrib import admin, messages
+from django.http import HttpResponse
 from django.template.response import TemplateResponse
 from django.urls import reverse
 from django.utils.html import format_html
+from django.utils import timezone
 
 from .forms import ReasonForm
-from .models import Employer, Flag, LicenceDocument, Notification, Nurse
+from .models import Employer, Flag, LicenceDocument, Notification, Nurse, HRRegistrationRequest
 from .permissions import is_hr
 from .services import approve_nurse, flag_nurse, reject_nurse
 
@@ -73,7 +75,7 @@ class NurseAdmin(admin.ModelAdmin):
         "employer_confirmed_by",
     )
     inlines = (LicenceDocumentInline, FlagInline)
-    actions = ("approve_selected", "reject_selected", "flag_selected")
+    actions = ("approve_selected", "reject_selected", "flag_selected", "export_csv")
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -135,13 +137,7 @@ class NurseAdmin(admin.ModelAdmin):
             return (
                 (
                     "Identity",
-                    {
-                        "fields": (
-                            "full_name",
-                            "nanm_id",
-                            "photo",
-                        )
-                    },
+                    {"fields": ("full_name", "nanm_id", "photo")},
                 ),
                 (
                     "Employment",
@@ -158,12 +154,7 @@ class NurseAdmin(admin.ModelAdmin):
                 ),
                 (
                     "Status",
-                    {
-                        "fields": (
-                            "record_status",
-                            "licence_expiry",
-                        )
-                    },
+                    {"fields": ("record_status", "licence_expiry")},
                 ),
             )
         return super().get_fieldsets(request, obj)
@@ -226,6 +217,51 @@ class NurseAdmin(admin.ModelAdmin):
             "admin_review_confirm.html",
             {"title": "Flag nurse(s)", "nurses": queryset, "action": "flag", "reason_required": True},
         )
+
+    @admin.action(description="Export selected nurses as CSV")
+    def export_csv(self, request, queryset):
+        if not request.user.is_superuser and not request.user.groups.filter(name="Super Admin").exists():
+            messages.error(request, "Only super admins may export nurse data.")
+            return
+
+        import csv
+        from io import StringIO
+
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "nanm_id",
+            "full_name",
+            "email",
+            "phone",
+            "licence_number",
+            "licence_expiry",
+            "record_status",
+            "employer",
+            "ward",
+            "specialty",
+            "cadre",
+        ])
+        for nurse in queryset:
+            writer.writerow([
+                nurse.nanm_id or "",
+                nurse.full_name,
+                nurse.email,
+                nurse.phone,
+                nurse.licence_number,
+                nurse.licence_expiry,
+                nurse.record_status,
+                nurse.employer.name if nurse.employer else "",
+                nurse.ward,
+                nurse.specialty,
+                nurse.cadre,
+            ])
+
+        response = HttpResponse(output.getvalue(), content_type="text/csv")
+        response["Content-Disposition"] = 'attachment; filename="nurses_export.csv"'
+        return response
+
+    export_csv.short_description = "Export selected nurses as CSV"
 
     fieldsets = (
         (
@@ -296,3 +332,43 @@ class NotificationAdmin(admin.ModelAdmin):
     list_filter = ("type", "status")
     search_fields = ("nurse__full_name", "nurse__nanm_id")
     raw_id_fields = ("nurse",)
+
+
+@admin.register(HRRegistrationRequest)
+class HRRegistrationRequestAdmin(admin.ModelAdmin):
+    list_display = ("email", "hospital_name", "status", "created_at", "reviewed_by")
+    list_filter = ("status", "employer_type", "lga")
+    search_fields = ("email", "hospital_name", "lga")
+    readonly_fields = ("created_at", "updated_at", "reviewed_at", "reviewed_by")
+    actions = ["approve_selected", "reject_selected"]
+
+    def approve_selected(self, request, queryset):
+        if not request.user.is_superuser and not request.user.groups.filter(name="Super Admin").exists():
+            messages.error(request, "Only super admins may approve HR registrations.")
+            return
+        approved = 0
+        for registration in queryset.filter(status=HRRegistrationRequest.Status.PENDING):
+            registration.status = HRRegistrationRequest.Status.APPROVED
+            registration.reviewed_by = request.user
+            registration.reviewed_at = timezone.now()
+            registration.save(update_fields=["status", "reviewed_by", "reviewed_at", "updated_at"])
+            approved += 1
+        messages.success(request, f"Approved {approved} HR registration(s).")
+
+    approve_selected.short_description = "Approve selected HR registrations"
+
+    def reject_selected(self, request, queryset):
+        if not request.user.is_superuser and not request.user.groups.filter(name="Super Admin").exists():
+            messages.error(request, "Only super admins may reject HR registrations.")
+            return
+        rejected = 0
+        for registration in queryset.filter(status=HRRegistrationRequest.Status.PENDING):
+            registration.status = HRRegistrationRequest.Status.REJECTED
+            registration.reviewed_by = request.user
+            registration.reviewed_at = timezone.now()
+            registration.reason = registration.reason or "No reason provided"
+            registration.save(update_fields=["status", "reviewed_by", "reviewed_at", "reason", "updated_at"])
+            rejected += 1
+        messages.success(request, f"Rejected {rejected} HR registration(s).")
+
+    reject_selected.short_description = "Reject selected HR registrations"

@@ -35,7 +35,7 @@ def transition_nurse(actor, nurse, new_status, reason=""):
     """Perform a status transition on a nurse record.
 
     - `actor` must have officer-or-above permission.
-    - Every transition except ``pending -> approved`` requires a non‑empty ``reason``.
+    - Every transition except ``pending -> approved`` requires a non-empty ``reason``.
     - The function is wrapped in ``transaction.atomic()`` and uses
       ``select_for_update()`` to avoid race conditions.
     - Flagging a nurse creates a ``Flag`` row.
@@ -51,16 +51,15 @@ def transition_nurse(actor, nurse, new_status, reason=""):
     old_status = nurse.record_status
 
     if new_status not in ALLOWED_TRANSITIONS.get(old_status, set()):
-        raise ValidationError(
-            f"Invalid transition from {old_status} to {new_status}."
-        )
+        raise ValidationError(f"Invalid transition from {old_status} to {new_status}.")
 
     # Reason requirement: all transitions except pending->approved need a reason
     if old_status != "pending" or new_status != "approved":
         if not reason:
-            raise ValidationError(
-                "A reason is required for this transition."
-            )
+            raise ValidationError("A reason is required for this transition.")
+
+    if old_status == "revoked" and new_status != "revoked":
+        raise ValidationError("Revoked records cannot be reactivated.")
 
     with transaction.atomic():
         nurse = Nurse.objects.select_for_update().get(pk=nurse.pk)
@@ -144,6 +143,20 @@ def flag_nurse(actor, nurse_pk, reason):
     from .models import Nurse
     nurse = Nurse.objects.get(pk=nurse_pk)
     return transition_nurse(actor, nurse, "flagged", reason)
+
+
+def suspend_nurse(actor, nurse_pk, reason):
+    """Convenience wrapper that transitions the nurse to ``suspended``."""
+    from .models import Nurse
+    nurse = Nurse.objects.get(pk=nurse_pk)
+    return transition_nurse(actor, nurse, "suspended", reason)
+
+
+def revoke_nurse(actor, nurse_pk, reason):
+    """Convenience wrapper that transitions the nurse to ``revoked``."""
+    from .models import Nurse
+    nurse = Nurse.objects.get(pk=nurse_pk)
+    return transition_nurse(actor, nurse, "revoked", reason)
 
 
 def confirm_employment(actor, nurse_pk):

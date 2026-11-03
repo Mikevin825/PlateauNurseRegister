@@ -6,6 +6,7 @@ app_name = "registry"
 
 urlpatterns = [
     path("", views.home, name="home"),
+    path("hr/register/", views.hr_registration, name="hr_registration"),
     path("register/", views.register, name="register"),
     path(
         "register/success/<int:pk>/",
@@ -26,4 +27,5 @@ urlpatterns = [
     path("nurses/<int:pk>/approval/", views.approval_confirmation, name="approval_confirmation"),
     path("nurses/<int:pk>/email-card/", views.email_card_link, name="email_card_link"),
     path("card/<str:token>/", views.signed_card, name="signed_card"),
+    path("hr/review/<int:pk>/", views.approve_hr_registration, name="approve_hr_registration"),
 ]
