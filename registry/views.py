@@ -9,7 +9,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import Group
 from django.core import signing
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -329,16 +329,16 @@ def approve_hr_registration(request, pk):
                         "approved": True,
                     },
                 )
-                user, created = User.objects.get_or_create(
-                    username=registration.email.split("@", 1)[0],
-                    defaults={
-                        "email": registration.email,
-                        "is_staff": True,
-                        "password": registration.password,
-                    },
-                )
+                username = registration.email.split("@", 1)[0]
+                if User.objects.filter(email__iexact=registration.email).exists():
+                    raise ValidationError("An account already exists for this email.")
+                if User.objects.filter(username__iexact=username).exists():
+                    username = registration.email
+                if User.objects.filter(username__iexact=username).exists():
+                    raise ValidationError("Could not allocate a unique username for this account.")
+                user = User.objects.create_user(username=username, email=registration.email)
                 user.email = registration.email
-                user.set_password(registration.password)
+                user.password = registration.password
                 user.is_staff = True
                 user.save()
                 user.groups.add(Group.objects.get(name=HR))
@@ -383,4 +383,3 @@ def renew_nurse(request, nurse_pk):
     else:
         form = RenewalForm(initial={"new_expiry_date": nurse.licence_expiry})
     return render(request, "admin/renew_nurse.html", {"form": form, "nurse": nurse})
-

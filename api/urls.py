@@ -1,7 +1,29 @@
 from django.urls import path
 
-from .views import verify_nurse
+from . import views
 
 urlpatterns = [
-    path("verify/<str:nanm_id>/", verify_nurse, name="verify_nurse"),
+    path("verify/<str:nanm_id>/", views.verify_nurse, name="verify_nurse"),
+    path("auth/token/", views.token_login, name="token_login"),
+    path("register/", views.register_nurse, name="register_nurse"),
+    path("me/", views.current_user, name="current_user"),
+    path("nurse/profile/", views.nurse_profile, name="nurse_profile"),
+    path("nurse/renew/", views.renew_nurse, name="renew_nurse"),
+    path("nurse/activity/", views.nurse_activity, name="nurse_activity"),
+    path("nurse/card/", views.nurse_card, name="nurse_card"),
+    path("admin/renewals/", views.renewal_queue, name="renewal_queue"),
+    path("admin/renewals/<int:pk>/", views.review_renewal, name="review_renewal"),
+    path("admin/summary/", views.admin_dashboard_summary, name="admin_dashboard_summary"),
+    path("admin/nurses/", views.admin_nurses, name="admin_nurses"),
+    path("admin/nurses/<int:pk>/", views.admin_nurses, name="admin_nurse_detail"),
+    path("admin/hr-users/", views.admin_hr_users, name="admin_hr_users"),
+    path("admin/hr-users/<int:pk>/", views.admin_hr_users, name="admin_hr_user_detail"),
+    path("admin/supervisors/", views.admin_supervisors, name="admin_supervisors"),
+    path("admin/supervisors/<int:pk>/", views.admin_supervisors, name="admin_supervisor_detail"),
+    path("hr/nurses/", views.hr_nurses, name="hr_nurses"),
+    path("hr/nurses/<int:pk>/confirm/", views.confirm_employment, name="confirm_employment"),
+    path("hr/register/", views.register_hr, name="register_hr"),
+    path("hr/employers/", views.employer_options, name="employer_options"),
+    path("admin/hr-registrations/", views.hr_review_queue, name="hr_review_queue"),
+    path("admin/hr-registrations/<int:pk>/", views.review_hr_registration, name="review_hr_registration"),
 ]
