@@ -1,0 +1,23 @@
+{% load static %}
+{% extends "base.html" %}
+{% block title %}Approval Confirmation{% endblock %}
+{% block extra_head %}
+  <link rel="stylesheet" href="{% static 'css/card.css' %}">
+{% endblock %}
+{% block content %}
+  <section class="page-shell">
+    <h1>Approval confirmed</h1>
+    <p>{{ nurse.full_name }} has been approved and issued NANNM ID {{ nurse.nanm_id }}.</p>
+
+    <div class="card-actions">
+      <a class="btn-primary" href="{{ direct_url }}" target="_blank" rel="noopener">Print card</a>
+      <button type="button" onclick="navigator.clipboard.writeText('{{ signed_url }}')">Copy card link</button>
+      <form method="post" action="{% url 'registry:email_card_link' nurse.pk %}">
+        {% csrf_token %}
+        <button type="submit">Email card link</button>
+      </form>
+    </div>
+
+    <p>Signed card link: <a href="{{ signed_url }}">{{ signed_url }}</a></p>
+  </section>
+{% endblock %}

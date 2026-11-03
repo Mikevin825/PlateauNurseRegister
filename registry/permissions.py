@@ -5,8 +5,11 @@ SUPERVISOR = "Supervisor"
 SUPER_ADMIN = "Super Admin"
 HR = "HR"
 
-STAFF_GROUPS = (OFFICER, SUPERVISOR, SUPER_ADMIN)
+STAFF_GROUPS = (SUPERVISOR, SUPER_ADMIN)
 ALL_GROUPS = (OFFICER, SUPERVISOR, SUPER_ADMIN, HR)
+
+# Legacy compatibility: Officer remains available for older scripts and data,
+# but the active operational reviewer model is Supervisor and Super Admin.
 
 
 def in_group(user, group_name):
@@ -33,20 +36,24 @@ def is_hr(user):
     return in_group(user, HR)
 
 
+def is_staff_reviewer(user):
+    return is_supervisor(user) or is_super_admin(user)
+
+
 def is_officer_or_above(user):
-    return is_officer(user) or is_supervisor(user) or is_super_admin(user)
+    return is_staff_reviewer(user) or is_officer(user)
 
 
 def can_reveal_nin(user):
-    return is_officer_or_above(user)
+    return is_staff_reviewer(user) or is_officer(user)
 
 
 def can_view_documents(user):
-    return is_officer_or_above(user)
+    return is_staff_reviewer(user) or is_officer(user)
 
 
 def can_view_nurse_photo(user, nurse):
-    if is_officer_or_above(user):
+    if is_staff_reviewer(user) or is_officer(user):
         return True
     return bool(
         is_hr(user)
@@ -71,6 +78,6 @@ def filter_employers_for_user(user, queryset: QuerySet | None = None):
     queryset = queryset if queryset is not None else Employer.objects.all()
     if is_hr(user):
         return queryset.filter(hr_users=user).distinct()
-    if is_super_admin(user) or is_supervisor(user) or is_officer(user):
+    if is_super_admin(user) or is_supervisor(user):
         return queryset
     return queryset.none()

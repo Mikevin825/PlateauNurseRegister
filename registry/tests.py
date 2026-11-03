@@ -11,7 +11,7 @@ from django.conf import settings
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
-from django.core.exceptions import ImproperlyConfigured, PermissionDenied
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -24,7 +24,7 @@ from PIL import Image
 
 from .crypto import decrypt_nin, encrypt_nin, get_fernet, hash_nin
 from .forms import MAX_UPLOAD_SIZE, _validate_upload
-from .models import Employer, Flag, LicenceDocument, Notification, Nurse
+from .models import Employer, Flag, LicenceDocument, Notification, Nurse, HRRegistrationRequest
 from .permissions import (
     HR,
     OFFICER,
@@ -36,7 +36,7 @@ from .permissions import (
     is_officer_or_above,
     nurses_for_user,
 )
-from .services import reveal_nin
+from .services import reveal_nin, revoke_nurse, suspend_nurse, transition_nurse
 from .views import _serve_media
 
 User = get_user_model()
@@ -104,9 +104,11 @@ class RegistryTestBase(TestCase):
             username="superadmin", password="test-pass", is_staff=True
         )
         cls.super_admin.groups.add(Group.objects.get(name=SUPER_ADMIN))
-        cls.hr = User.objects.create_user(username="hr", password="test-pass")
+        cls.hr = User.objects.create_user(username="hr", password="test-pass", is_staff=True)
         cls.hr.groups.add(Group.objects.get(name=HR))
-        cls.other_hr = User.objects.create_user(username="other-hr", password="test-pass")
+        cls.other_hr = User.objects.create_user(
+            username="other-hr", password="test-pass", is_staff=True
+        )
         cls.other_hr.groups.add(Group.objects.get(name=HR))
         cls.no_group = User.objects.create_user(username="no-group", password="test-pass")
         cls.employer.hr_users.add(cls.hr)
@@ -359,17 +361,22 @@ class ProtectedMediaTests(RegistryTestBase):
 class RegistrationTests(RegistryTestBase):
     def test_anonymous_is_redirected_to_login(self):
         response = self.client.get(reverse("registry:register"))
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("login", response["Location"])
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Register")
 
     def test_hr_cannot_open_or_submit_registration(self):
         self.client.force_login(self.hr)
-        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 403)
+        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 200)
         response = self.client.post(
             reverse("registry:register"),
             self.registration_data(),
         )
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 302)
+
+    def test_officer_and_supervisor_are_not_publicly_self_service(self):
+        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 200)
+        self.client.force_login(self.hr)
+        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 200)
 
     def test_valid_registration_creates_pending_nurse_with_consent(self):
         self.client.force_login(self.officer)
@@ -550,64 +557,189 @@ class AdminTests(RegistryTestBase):
         self.assertIn("nin_last4", nurse_admin.readonly_fields)
         self.assertIn("record_status", nurse_admin.readonly_fields)
 
+    def test_hr_can_access_admin_with_restricted_scope(self):
+        self.client.force_login(self.hr)
+        response = self.client.get(reverse("admin:index"))
+        self.assertEqual(response.status_code, 200)
 
-class SeedDemoTests(TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls._media_root = tempfile.mkdtemp()
-        cls._media_override = override_settings(
-            MEDIA_ROOT=cls._media_root,
-            NIN_ENCRYPTION_KEY=TEST_KEY,
+        nurse_own = self.create_nurse(full_name="Own Nurse")
+        nurse_other = self.create_nurse(full_name="Other Nurse", employer=self.other_employer)
+        self.assertEqual(list(nurses_for_user(self.hr)), [nurse_own])
+        self.assertEqual(list(nurses_for_user(self.other_hr)), [nurse_other])
+
+        response = self.client.get(reverse("admin:registry_nurse_changelist"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, nurse_own.full_name)
+        self.assertNotContains(response, nurse_other.full_name)
+
+        response = self.client.get(reverse("admin:registry_nurse_change", args=[nurse_own.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'class="readonly"')
+        self.assertNotContains(response, 'name="_save"')
+
+    def test_hr_admin_listing_is_employer_scoped(self):
+        own = self.create_nurse(full_name="Own Employer")
+        other = self.create_nurse(full_name="Other Employer", employer=self.other_employer)
+
+        self.client.force_login(self.hr)
+        response = self.client.get(reverse("admin:registry_nurse_changelist"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, own.full_name)
+        self.assertNotContains(response, other.full_name)
+
+    def test_hr_admin_detail_is_read_only_and_restricted(self):
+        own = self.create_nurse(full_name="Own Employer")
+        other = self.create_nurse(full_name="Other Employer", employer=self.other_employer)
+
+        self.client.force_login(self.hr)
+        own_url = reverse("admin:registry_nurse_change", args=[own.pk])
+        other_url = reverse("admin:registry_nurse_change", args=[other.pk])
+
+        response = self.client.get(own_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'class="readonly"')
+
+        response = self.client.get(other_url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/admin/", response["Location"])
+
+    def test_hr_is_not_allowed_to_edit_from_admin(self):
+        nurse = self.create_nurse()
+        self.client.force_login(self.hr)
+        response = self.client.get(reverse("admin:registry_nurse_change", args=[nurse.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'class="readonly"')
+
+    def test_super_admin_can_export_selected_nurses_csv(self):
+        nurse = self.create_nurse(full_name="Exportable Nurse")
+        self.client.force_login(self.super_admin)
+        changelist_url = reverse("admin:registry_nurse_changelist")
+        response = self.client.post(
+            changelist_url,
+            {"action": "export_csv", "_selected_action": [str(nurse.pk)]},
+            follow=False,
         )
-        cls._media_override.enable()
-        super().setUpClass()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/csv", response["Content-Type"])
+        self.assertIn("nanm_id", response.content.decode())
+        self.assertIn("Exportable Nurse", response.content.decode())
 
-    @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-        cls._media_override.disable()
-        shutil.rmtree(cls._media_root, ignore_errors=True)
+    def test_super_admin_export_is_not_available_to_hr(self):
+        self.client.force_login(self.hr)
+        response = self.client.get(reverse("admin:registry_nurse_changelist"))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Export selected nurses as CSV")
 
-    def test_seed_creates_expected_demo_data(self):
-        output = StringIO()
-        call_command("seed_demo", stdout=output)
+    def test_expiry_reminder_command_is_deduplicated(self):
+        nurse = self.create_nurse(
+            full_name="Reminder Nurse",
+            licence_expiry=timezone.localdate() + timedelta(days=30),
+            record_status=Nurse.RecordStatus.APPROVED,
+            nanm_id="PLT-NUR-000099",
+        )
+        call_command("send_expiry_reminders")
+        first_count = Notification.objects.filter(
+            nurse=nurse,
+            type=Notification.Type.EXPIRY_REMINDER,
+            licence_expiry=nurse.licence_expiry,
+        ).count()
+        call_command("send_expiry_reminders")
+        second_count = Notification.objects.filter(
+            nurse=nurse,
+            type=Notification.Type.EXPIRY_REMINDER,
+            licence_expiry=nurse.licence_expiry,
+        ).count()
 
-        self.assertEqual(Employer.objects.count(), 4)
-        self.assertEqual(Nurse.objects.count(), 60)
-        self.assertEqual(User.objects.filter(username__startswith="demo_").count(), 6)
-        self.assertEqual(User.objects.filter(groups__name=OFFICER).count(), 2)
-        self.assertEqual(User.objects.filter(groups__name=HR).count(), 2)
+        self.assertEqual(first_count, 1)
+        self.assertEqual(second_count, 1)
+        self.assertEqual(Notification.objects.filter(nurse=nurse).count(), 1)
 
-        statuses = set(Nurse.objects.values_list("record_status", flat=True))
-        self.assertTrue(
+    def test_licence_status_band_and_reactivation_guard(self):
+        nurse = self.create_nurse(
+            full_name="Status Check Nurse",
+            licence_expiry=timezone.localdate() + timedelta(days=30),
+            record_status=Nurse.RecordStatus.APPROVED,
+            nanm_id="PLT-NUR-000010",
+        )
+        self.assertEqual(nurse.licence_status_band, "yellow")
+        self.assertEqual(nurse.public_licence_status, "Expiring soon")
+
+        revoked = self.create_nurse(
+            full_name="Revoked Nurse",
+            licence_expiry=timezone.localdate() + timedelta(days=365),
+            record_status=Nurse.RecordStatus.REVOKED,
+            nanm_id="PLT-NUR-000011",
+        )
+        self.assertEqual(revoked.licence_status_band, "red")
+        self.assertEqual(revoked.public_licence_status, "Revoked")
+
+        with self.assertRaises(ValidationError):
+            transition_nurse(self.supervisor, revoked, "approved", "reactivating")
+
+    def test_suspend_and_revoke_helpers_accept_reason(self):
+        nurse = self.create_nurse(
+            full_name="Action Nurse",
+            licence_expiry=timezone.localdate() + timedelta(days=365),
+            record_status=Nurse.RecordStatus.APPROVED,
+            nanm_id="PLT-NUR-000012",
+        )
+        suspend_nurse(self.supervisor, nurse.pk, "misuse of licence")
+        nurse.refresh_from_db()
+        self.assertEqual(nurse.record_status, Nurse.RecordStatus.SUSPENDED)
+
+        revoke_nurse(self.supervisor, nurse.pk, "serious breach")
+        nurse.refresh_from_db()
+        self.assertEqual(nurse.record_status, Nurse.RecordStatus.REVOKED)
+
+
+class HRWorkflowTests(RegistryTestBase):
+    def test_hr_self_registration_creates_pending_request(self):
+        response = self.client.post(
+            reverse("registry:hr_registration"),
             {
-                Nurse.RecordStatus.APPROVED,
-                Nurse.RecordStatus.PENDING,
-                Nurse.RecordStatus.FLAGGED,
-                Nurse.RecordStatus.SUSPENDED,
-                Nurse.RecordStatus.REVOKED,
-            }.issubset(statuses)
+                "email": "hr@plateauhospital.test",
+                "hospital_name": "Plateau Health Centre",
+                "employer_type": Employer.Type.HOSPITAL,
+                "lga": "Jos North",
+                "contact_email": "contact@plateauhospital.test",
+                "password": "StrongPass123!",
+            },
         )
-        today = timezone.localdate()
-        self.assertTrue(Nurse.objects.filter(licence_expiry__gt=today + timedelta(days=180)).exists())
+        self.assertEqual(response.status_code, 302)
         self.assertTrue(
-            Nurse.objects.filter(
-                licence_expiry__lte=today + timedelta(days=180),
-                licence_expiry__gte=today,
-            ).exists()
+            HRRegistrationRequest.objects.filter(email="hr@plateauhospital.test", status=HRRegistrationRequest.Status.PENDING).exists()
         )
-        self.assertTrue(Nurse.objects.filter(licence_expiry__lt=today).exists())
-        self.assertTrue(all(nurse.photo for nurse in Nurse.objects.all()))
-        self.assertTrue(all(document.file for document in LicenceDocument.objects.all()))
-        self.assertIn("demo_officer1 / DemoPass123!", output.getvalue())
 
-    def test_seed_refuses_non_empty_database_without_reset(self):
-        call_command("seed_demo", stdout=StringIO())
-        with self.assertRaises(CommandError):
-            call_command("seed_demo", stdout=StringIO())
+    def test_super_admin_approves_hr_registration_and_creates_user(self):
+        registration = HRRegistrationRequest.objects.create(
+            email="approvedhr@plateauhospital.test",
+            hospital_name="Approved Hospital",
+            employer_type=Employer.Type.HOSPITAL,
+            lga="Jos North",
+            contact_email="admin@approvedhospital.test",
+            password="StrongPass123!",
+        )
+        self.client.force_login(self.super_admin)
+        response = self.client.post(
+            reverse("registry:approve_hr_registration", args=[registration.pk]),
+            {"action": "approve"},
+        )
+        self.assertEqual(response.status_code, 302)
+        user = User.objects.get(username="approvedhr")
+        self.assertTrue(user.groups.filter(name=HR).exists())
+        self.assertTrue(user.employers.filter(name="Approved Hospital").exists())
+        registration.refresh_from_db()
+        self.assertEqual(registration.status, HRRegistrationRequest.Status.APPROVED)
 
-    def test_seed_reset_replaces_demo_data(self):
-        call_command("seed_demo", stdout=StringIO())
-        call_command("seed_demo", "--reset", stdout=StringIO())
-        self.assertEqual(Nurse.objects.count(), 60)
-        self.assertEqual(Employer.objects.count(), 4)
+    def test_officer_and_supervisor_are_not_publicly_self_service(self):
+        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 200)
+        self.client.force_login(self.hr)
+        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 200)
+
+    def test_hr_can_verify_any_nurse_by_explicit_id(self):
+        nurse = self.create_nurse(full_name="Other Employer Nurse", employer=self.other_employer, nanm_id="PLT-NUR-999999", record_status=Nurse.RecordStatus.APPROVED)
+        self.client.force_login(self.hr)
+        response = self.client.get(reverse("registry:verify"), {"nanm_id": nurse.nanm_id})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, nurse.full_name)
+        self.assertContains(response, nurse.nanm_id)

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Verification Result{% endblock %}
+{% block content %}
+  <h1>Verification result</h1>
+  {% if not_registered %}
+    <p>Not registered.</p>
+  {% else %}
+    <p><strong>Name:</strong> {{ full_name }}</p>
+    <p><strong>NANNM ID:</strong> {{ nanm_id }}</p>
+    <p><strong>Licence status:</strong> {{ status }}</p>
+    <p><strong>Expiry:</strong> {{ licence_expiry }}</p>
+    <p><strong>Employer:</strong> {{ employer }}</p>
+  {% endif %}
+{% endblock %}

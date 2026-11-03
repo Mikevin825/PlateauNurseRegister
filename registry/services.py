@@ -2,7 +2,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from .permissions import can_reveal_nin, is_officer_or_above
+from .permissions import can_reveal_nin, is_hr, is_staff_reviewer
 
 
 def reveal_nin(actor, nurse):
@@ -35,7 +35,7 @@ def transition_nurse(actor, nurse, new_status, reason=""):
     """Perform a status transition on a nurse record.
 
     - `actor` must have officer-or-above permission.
-    - Every transition except ``pending -> approved`` requires a non‑empty ``reason``.
+    - Every transition except ``pending -> approved`` requires a non-empty ``reason``.
     - The function is wrapped in ``transaction.atomic()`` and uses
       ``select_for_update()`` to avoid race conditions.
     - Flagging a nurse creates a ``Flag`` row.
@@ -44,23 +44,22 @@ def transition_nurse(actor, nurse, new_status, reason=""):
     """
     from .models import Nurse, Flag
 
-    if not (is_officer_or_above(actor) or actor.is_superuser):
-        raise PermissionDenied("Only officers or supervisors may transition nurses.")
+    if not (is_staff_reviewer(actor) or actor.is_superuser):
+        raise PermissionDenied("Only supervisors or super admins may transition nurses.")
 
     reason = reason.strip()
     old_status = nurse.record_status
 
     if new_status not in ALLOWED_TRANSITIONS.get(old_status, set()):
-        raise ValidationError(
-            f"Invalid transition from {old_status} to {new_status}."
-        )
+        raise ValidationError(f"Invalid transition from {old_status} to {new_status}.")
 
     # Reason requirement: all transitions except pending->approved need a reason
     if old_status != "pending" or new_status != "approved":
         if not reason:
-            raise ValidationError(
-                "A reason is required for this transition."
-            )
+            raise ValidationError("A reason is required for this transition.")
+
+    if old_status == "revoked" and new_status != "revoked":
+        raise ValidationError("Revoked records cannot be reactivated.")
 
     with transaction.atomic():
         nurse = Nurse.objects.select_for_update().get(pk=nurse.pk)
@@ -144,6 +143,39 @@ def flag_nurse(actor, nurse_pk, reason):
     from .models import Nurse
     nurse = Nurse.objects.get(pk=nurse_pk)
     return transition_nurse(actor, nurse, "flagged", reason)
+
+
+def suspend_nurse(actor, nurse_pk, reason):
+    """Convenience wrapper that transitions the nurse to ``suspended``."""
+    from .models import Nurse
+    nurse = Nurse.objects.get(pk=nurse_pk)
+    return transition_nurse(actor, nurse, "suspended", reason)
+
+
+def revoke_nurse(actor, nurse_pk, reason):
+    """Convenience wrapper that transitions the nurse to ``revoked``."""
+    from .models import Nurse
+    nurse = Nurse.objects.get(pk=nurse_pk)
+    return transition_nurse(actor, nurse, "revoked", reason)
+
+
+def confirm_employment(actor, nurse_pk):
+    """Record that an HR user confirmed a nurse works for their employer."""
+    from .models import Nurse
+
+    if not is_hr(actor):
+        raise PermissionDenied("Only HR users can confirm employer details.")
+
+    with transaction.atomic():
+        nurse = Nurse.objects.select_for_update().get(pk=nurse_pk)
+        if not nurse.employer_id or not nurse.employer.hr_users.filter(pk=actor.pk).exists():
+            raise PermissionDenied("You may only confirm nurses from your employer.")
+
+        nurse.employer_confirmed_at = timezone.now()
+        nurse.employer_confirmed_by = actor
+        nurse.save(update_fields=["employer_confirmed_at", "employer_confirmed_by", "updated_at"])
+
+    return nurse
 
 
 def _next_nanm_id():

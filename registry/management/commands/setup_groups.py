@@ -11,26 +11,24 @@ class Command(BaseCommand):
         registry_permissions = Permission.objects.filter(content_type__app_label="registry")
         auditlog_permissions = Permission.objects.filter(content_type__app_label="auditlog")
 
-        officer_codenames = {
+        supervisor_codenames = {
             "view_nurse",
             "add_nurse",
             "change_nurse",
             "view_licencedocument",
             "add_licencedocument",
+            "change_licencedocument",
             "view_employer",
             "view_flag",
             "add_flag",
-            "view_notification",
-        }
-        supervisor_codenames = officer_codenames | {
-            "change_licencedocument",
             "change_flag",
             "delete_flag",
+            "view_notification",
         }
         hr_codenames = {"view_nurse", "view_employer"}
 
         assignments = {
-            OFFICER: registry_permissions.filter(codename__in=officer_codenames),
+            OFFICER: registry_permissions.filter(codename__in={"view_nurse", "view_employer"}),
             SUPERVISOR: registry_permissions.filter(codename__in=supervisor_codenames),
             SUPER_ADMIN: registry_permissions | auditlog_permissions,
             HR: registry_permissions.filter(codename__in=hr_codenames),

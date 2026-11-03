@@ -1,18 +1,52 @@
+{% load static %}
 {% extends "base.html" %}
 {% block title %}Nurse ID Card{% endblock %}
+{% block extra_head %}
+  <link rel="stylesheet" href="{% static 'css/card.css' %}">
+{% endblock %}
 {% block content %}
-  <h1>Nurse ID Card</h1>
-  <p><strong>NANNM ID:</strong> {{ nurse.nanm_id|default:"-" }}</p>
-  <p><strong>Name:</strong> {{ nurse.full_name }}</p>
-  <p><strong>Licence status:</strong> {{ nurse.public_licence_status|default:"-" }}</p>
-  <p><strong>Expiry:</strong> {{ nurse.licence_expiry }}</p>
-  {% if signed %}
-    <p>This card was opened via a signed, expiring link (valid for {{ CARD_LINK_MAX_AGE|default:"7 days" }}).</p>
-    <a href="{{ signed_url }}">Copy signed link</a>
-  {% else %}
-    <p>This is the direct card view (login required).</p>
-    <a href="{{ direct_url }}">Open card</a>
-  {% endif %}
-  <hr>
-  <p>Print this page using your browser's print dialog for a credit‑card‑size card (85.6 mm × 54 mm).</p>
+  <div class="card-layout">
+    <div class="card-sheet">
+      <div class="card">
+        <div class="card-header">
+          <h1>Plateau State Nurse Registry</h1>
+          <p>Official Nursing Licence Card</p>
+        </div>
+
+        <div class="card-body">
+          <div class="card-photo">
+            {% if nurse.photo %}
+              <img src="{{ nurse.photo.url }}" alt="{{ nurse.full_name }}">
+            {% else %}
+              <span>No photo</span>
+            {% endif %}
+          </div>
+
+          <div class="card-info">
+            <p><strong>Name</strong> <span>{{ nurse.full_name }}</span></p>
+            <p><strong>NANNM ID</strong> <span>{{ nurse.nanm_id|default:"-" }}</span></p>
+            <p><strong>Expiry</strong> <span>{{ nurse.licence_expiry }}</span></p>
+            <p><strong>Status</strong> <span>{{ nurse.public_licence_status|default:"-" }}</span></p>
+          </div>
+
+          <div class="card-qr">
+            {% if qr_url %}
+              <img src="{{ qr_url }}" alt="QR code">
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card-meta">
+      {% if signed %}
+        <p>This card was opened via a signed, expiring link (valid for {{ CARD_LINK_MAX_AGE|default:"7 days" }}).</p>
+      {% else %}
+        <p>This is the direct card view (login required).</p>
+      {% endif %}
+      <p><a href="{{ signed_url }}">Copy signed link</a></p>
+      <p><a href="{{ direct_url }}">Open direct card</a></p>
+      <p>Print this page using your browser's print dialog for a credit-card-size card (85.6 mm × 54 mm).</p>
+    </div>
+  </div>
 {% endblock %}

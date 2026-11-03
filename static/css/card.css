@@ -1,26 +1,145 @@
-/* card.css – print‑ready ID card (credit‑card size 85.6 mm × 54 mm) */
-@page{size:85.6mm 54mm;margin:0;}
-body{font-family:Arial,Helvetica,sans-serif;background:#fff;color:#000;padding:0;margin:0;}
-.card{border:2px solid #000;width:85.6mm;height:54mm;padding:2mm;box-sizing:border-box;position:relative;}
+/* card.css – print-ready ID card */
+@page {
+  size: 85.6mm 54mm;
+  margin: 0;
+}
 
-/* header area */
-.card .header{text-align:center;padding-bottom:1mm;border-bottom:1px solid #000;margin-bottom:1mm;}
-.card .header h1{font-size:1.2rem;margin:0;}
-.card .header p{font-size:0.8rem;color:#555;margin:0.2rem 0;}
+body {
+  margin: 0;
+  background: #f4f6f8;
+  font-family: Arial, Helvetica, sans-serif;
+  color: #111827;
+}
 
-/* nurse info */
-.card .info{padding:1mm 0;}
-.card .info p{margin:0.1rem 0;font-size:0.9rem;}
-.card .info strong{display:inline-block;width:40%;}
+.card-layout {
+  max-width: 980px;
+  margin: 32px auto;
+  padding: 16px;
+}
 
-/* photo */
-.card .photo{width:30mm;height:40mm;background:#ddd;position:relative;top:-2mm;left:2mm;outline:1px solid;outline-color:oklch(0 0 0 / 0.1);outline-offset:-1px;}
-.card .photo.dark{outline-color:oklch(1 0 0 / 0.1);}
+.card-sheet {
+  display: flex;
+  justify-content: center;
+}
 
-/* QR code placeholder */
-.card .qr{width:25mm;height:25mm;background:#eee;position:relative;top:42mm;left:60mm;}
+.card {
+  width: 85.6mm;
+  height: 54mm;
+  background: #fff;
+  border: 2px solid #111827;
+  border-radius: 10px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  box-shadow: 0 8px 18px rgba(17, 24, 39, 0.08);
+}
 
-/* Print button (only visible in print) */
-@media print{.print-only{display:block;}}
-/* image outline for dark mode */
-@media (prefers-color-scheme: dark){.card .photo.dark{outline-color:oklch(1 0 0 / 0.1);}}
+.card-header {
+  text-align: center;
+  border-bottom: 1px solid #d1d5db;
+  padding-bottom: 5px;
+  margin-bottom: 8px;
+}
+
+.card-header h1 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.card-header p {
+  font-size: 10px;
+  margin: 2px 0 0;
+  color: #4b5563;
+}
+
+.card-body {
+  display: grid;
+  grid-template-columns: 20mm 1fr 22mm;
+  gap: 8px;
+  align-items: center;
+}
+
+.card-photo {
+  width: 20mm;
+  height: 24mm;
+  border: 1px solid #d1d5db;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #e5e7eb;
+}
+
+.card-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.card-info {
+  font-size: 8.5px;
+}
+
+.card-info p {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 3px 0;
+}
+
+.card-info strong {
+  color: #374151;
+}
+
+.card-info span {
+  text-align: right;
+  word-break: break-word;
+}
+
+.card-qr {
+  width: 22mm;
+  height: 22mm;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d1d5db;
+  background: #fff;
+}
+
+.card-qr img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.card-meta {
+  margin-top: 20px;
+  font-size: 14px;
+  text-align: center;
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+@media print {
+  body {
+    background: #fff;
+  }
+
+  .navbar,
+  footer,
+  .card-actions,
+  .card-meta {
+    display: none !important;
+  }
+
+  .card-layout {
+    margin: 0;
+    padding: 0;
+  }
+}
