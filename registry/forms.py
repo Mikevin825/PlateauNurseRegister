@@ -120,6 +120,7 @@ class NurseRegistrationForm(forms.ModelForm):
         self.user = user
         super().__init__(*args, **kwargs)
         self.fields["employer"].queryset = Employer.objects.all()
+        self.custom_employer_name = self.initial.get("custom_employer_name", "")
         self.duplicate_warning = ""
 
     def clean_nin(self):
@@ -189,6 +190,22 @@ class NurseRegistrationForm(forms.ModelForm):
         nurse.consent_at = timezone.now()
         nurse.set_nin(self.cleaned_data["nin"])
         nurse.photo = self.cleaned_data["selfie"]
+
+        employer = self.cleaned_data.get("employer")
+        custom_employer_name = self.cleaned_data.get("custom_employer_name", "").strip()
+
+        if custom_employer_name:
+            # Use or create employer with custom name
+            nurse.employer, _ = Employer.objects.get_or_create(
+                name=custom_employer_name,
+                defaults={"type": Employer.Type.UNEMPLOYED},
+            )
+        elif employer:
+            nurse.employer = employer
+        else:
+            # No employer selected; set to unemployed if type available
+            pass  # employer field allows null/blank
+
         if commit:
             nurse.save()
         return nurse
@@ -207,6 +224,13 @@ class HRRegistrationForm(forms.Form):
     employer_type = forms.ChoiceField(
         label="Hospital type",
         choices=Employer.Type.choices,
+    )
+    custom_employer_name = forms.CharField(
+        label="Employer name (if not listed)",
+        max_length=255,
+        required=False,
+        widget=forms.TextInput(attrs={"placeholder": "e.g. Private Clinic"}),
+        help_text="Leave blank if selecting an existing employer above.",
     )
     lga = forms.CharField(
         label="Local government area",
@@ -239,3 +263,14 @@ class HRRegistrationForm(forms.Form):
             contact_email=(self.cleaned_data.get("contact_email") or "").strip(),
             password=self.cleaned_data["password"],
         )
+
+
+class RenewalForm(forms.ModelForm):
+    class Meta:
+        model = Nurse
+        fields = ("licence_expiry",)
+        widgets = {
+            "licence_expiry": forms.DateInput(attrs={"type": "date"}),
+        }
+
+

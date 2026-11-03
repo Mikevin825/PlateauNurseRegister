@@ -8,6 +8,7 @@ class Employer(models.Model):
         PRIMARY_HEALTH_CENTRE = "primary_health_centre", "Primary health centre"
         CLINIC = "clinic", "Clinic"
         OTHER = "other", "Other"
+        UNEMPLOYED = "unemployed", "Unemployed"
 
     name = models.CharField(max_length=255)
     type = models.CharField(max_length=32, choices=Type.choices, default=Type.HOSPITAL)

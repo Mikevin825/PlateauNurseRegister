@@ -5,7 +5,11 @@ from . import views
 app_name = "registry"
 
 urlpatterns = [
-    path("", views.home, name="home"),
+    
+
+path("nurses/<int:nurse_pk>/renew/", views.renew_nurse, name="renew_nurse"),
+
+path("", views.home, name="home"),
     path("hr/register/", views.hr_registration, name="hr_registration"),
     path("register/", views.register, name="register"),
     path(

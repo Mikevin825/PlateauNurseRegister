@@ -98,6 +98,15 @@ def transition_nurse(actor, nurse, new_status, reason=""):
     return nurse
 
 
+
+
+def update_licence_expiry(nurse_pk, new_expiry_date, actor):
+    """Update a nurse's licence expiry date."""
+    nurse = Nurse.objects.get(pk=nurse_pk)
+    nurse.licence_expiry = new_expiry_date
+    nurse.save(update_fields=["licence_expiry", "updated_at"])
+    return nurse
+
 def _send_rejection_email(nurse, reason):
     """Send the rejection e‑mail; any exception is caught so the transition
     is not rolled back."""
