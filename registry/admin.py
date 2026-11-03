@@ -1,8 +1,12 @@
 from django.contrib import admin
 from django.urls import reverse
 from django.utils.html import format_html
+from django.shortcuts import redirect, render
+from django.template.response import TemplateResponse
 
 from .models import Employer, Flag, LicenceDocument, Notification, Nurse
+from .forms import ReasonForm
+from .services import approve_nurse, reject_nurse, flag_nurse
 
 
 class LicenceDocumentInline(admin.TabularInline):
@@ -62,6 +66,70 @@ class NurseAdmin(admin.ModelAdmin):
         "employer_confirmed_by",
     )
     inlines = (LicenceDocumentInline, FlagInline)
+    actions = ("approve_selected", "reject_selected", "flag_selected",)
+
+    @admin.action(description="Approve selected nurse")
+    def approve_selected(self, request, queryset):
+        if queryset.count() != 1:
+            messages.error(request, "Select exactly one nurse to approve.")
+            return
+        nurse = queryset.first()
+        if nurse.record_status != Nurse.RecordStatus.PENDING:
+            messages.error(request, "Only pending nurses can be approved.")
+            return
+        if request.POST.get("post") == "yes":
+            approve_nurse(request.user, nurse.pk)
+            messages.success(request, "Nurse approved and NANNM ID issued.")
+            return redirect("registry:nurse_detail", pk=nurse.pk)
+        # Show confirmation page
+        return TemplateResponse(request, "admin_review_confirm.html", {
+            "title": "Approve nurse",
+            "nurse": nurse,
+            "action": "approve",
+            "reason_required": False,
+        })
+
+    @admin.action(description="Reject selected nurse(s)")
+    def reject_selected(self, request, queryset):
+        if request.POST.get("post"):
+            reason = request.POST.get("reason", "").strip()
+            if not reason:
+                messages.error(request, "A reason is required for rejection.")
+                return
+            for nurse in queryset:
+                if nurse.record_status != Nurse.RecordStatus.PENDING:
+                    messages.warning(request, f"Nurse {nurse.nanm_id} is not pending; skipping.")
+                    continue
+                reject_nurse(request.user, nurse.pk, reason)
+            messages.success(request, "Selected nurses rejected.")
+            return redirect("registry:nurse_changelist")
+        return TemplateResponse(request, "admin_review_confirm.html", {
+            "title": "Reject nurse(s)",
+            "nurses": queryset,
+            "action": "reject",
+            "reason_required": True,
+        })
+
+    @admin.action(description="Flag selected nurse(s)")
+    def flag_selected(self, request, queryset):
+        if request.POST.get("post"):
+            reason = request.POST.get("reason", "").strip()
+            if not reason:
+                messages.error(request, "A reason is required for flagging.")
+                return
+            for nurse in queryset:
+                if nurse.record_status != Nurse.RecordStatus.PENDING:
+                    messages.warning(request, f"Nurse {nurse.nanm_id} is not pending; skipping.")
+                    continue
+                flag_nurse(request.user, nurse.pk, reason)
+            messages.success(request, "Selected nurses flagged.")
+            return redirect("registry:nurse_changelist")
+        return TemplateResponse(request, "admin_review_confirm.html", {
+            "title": "Flag nurse(s)",
+            "nurses": queryset,
+            "action": "flag",
+            "reason_required": True,
+        })
     fieldsets = (
         (
             "Identity",

@@ -1,10 +1,22 @@
 {% extends "base.html" %}
-
 {% block title %}Register nurse · Plateau State Nurse Registry{% endblock %}
-
+{% block hero %}
+<section class="hero">
+  <h1>Register a nurse</h1>
+  <p>Record the nurse's details, licence scan, live selfie, and consent.</p>
+</section>
+{% endblock %}
 {% block content %}
+<div class="register-card">
+{% if messages %}
+  <div class="message-bar">
+    {% for m in messages %}
+      <div class="message {{ m.tags }}">{{ m }}</div>
+    {% endfor %}
+  </div>
+{% endif %}
+
 <h1>Register a nurse</h1>
-<p>Record the nurse's details, licence scan, live selfie, and consent.</p>
 
 {% if form.duplicate_warning %}
 <div role="alert" style="border: 1px solid #b45309; background: #fffbeb; padding: 1rem; margin-bottom: 1rem;">
@@ -13,19 +25,19 @@
 {% endif %}
 
 <form method="post" enctype="multipart/form-data" novalidate>
-    {{ csrf_input }}
-    {{ form.non_field_errors() }}
-    {{ form.as_p() }}
+{{ form.non_field_errors }}
+{{ form.as_p }}
 
-    <div>
-        <video id="camera" autoplay playsinline hidden style="max-width: 100%;"></video>
-        <canvas id="camera-canvas" hidden></canvas>
-        <button type="button" id="start-camera">Use camera for selfie</button>
-        <button type="button" id="capture-selfie" hidden>Capture selfie</button>
+    <div class="video-section">
+      <video id="camera" autoplay playsinline hidden style="max-width:100%;"></video>
+      <canvas id="camera-canvas" hidden></canvas>
+      <button type="button" id="start-camera" class="btn-secondary">Use camera for selfie</button>
+      <button type="button" id="capture-selfie" class="btn-secondary" hidden>Capture selfie</button>
     </div>
 
-    <button type="submit">Register nurse</button>
-</form>
+    <button type="submit" class="btn-primary">Register nurse</button>
+  </form>
+</div>
 
 <script>
 (function () {
@@ -48,9 +60,11 @@
             stream = await navigator.mediaDevices.getUserMedia({ video: true });
             video.srcObject = stream;
             video.hidden = false;
+            startButton.hidden = true;
             captureButton.hidden = false;
         } catch (error) {
             video.hidden = true;
+            startButton.hidden = false;
             captureButton.hidden = true;
         }
     });
@@ -74,6 +88,7 @@
                 stream.getTracks().forEach(function (track) { track.stop(); });
             }
             video.hidden = true;
+            startButton.hidden = false;
             captureButton.hidden = true;
         }, "image/jpeg", 0.9);
     });

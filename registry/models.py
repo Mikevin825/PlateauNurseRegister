@@ -133,6 +133,36 @@ class Nurse(models.Model):
 
         return decrypt_nin(self.nin_encrypted)
 
+    def save(self, *args, **kwargs):
+        # Enforce that the NANNM ID cannot be changed once issued
+        if self.pk:
+            try:
+                original = Nurse.objects.get(pk=self.pk)
+                if original.nanm_id and original.nanm_id != self.nanm_id:
+                    raise ValidationError(
+                        {"nanm_id": "The NANNM ID is immutable once issued."}
+                    )
+            except Nurse.DoesNotExist:
+                pass
+        super().save(*args, **kwargs)
+
+    @property
+    def public_licence_status(self):
+        from django.utils import timezone
+
+        today = timezone.localdate()
+        if self.record_status in {"flagged", "suspended", "revoked"}:
+            return self.get_record_status_display()
+        if self.record_status == "pending":
+            return "Pending"
+        if self.record_status == "rejected":
+            return "Rejected"
+        if self.licence_expiry < today:
+            return "Expired"
+        if (self.licence_expiry - today).days <= settings.LICENCE_EXPIRY_WARNING_DAYS:
+            return "Expiring soon"
+        return "Licensed"
+
 
 class LicenceDocument(models.Model):
     class DocumentType(models.TextChoices):

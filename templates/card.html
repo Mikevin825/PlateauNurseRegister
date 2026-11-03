@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Nurse ID Card{% endblock %}
+{% block content %}
+  <h1>Nurse ID Card</h1>
+  <p><strong>NANNM ID:</strong> {{ nurse.nanm_id|default:"-" }}</p>
+  <p><strong>Name:</strong> {{ nurse.full_name }}</p>
+  <p><strong>Licence status:</strong> {{ nurse.public_licence_status|default:"-" }}</p>
+  <p><strong>Expiry:</strong> {{ nurse.licence_expiry }}</p>
+  {% if signed %}
+    <p>This card was opened via a signed, expiring link (valid for {{ CARD_LINK_MAX_AGE|default:"7 days" }}).</p>
+    <a href="{{ signed_url }}">Copy signed link</a>
+  {% else %}
+    <p>This is the direct card view (login required).</p>
+    <a href="{{ direct_url }}">Open card</a>
+  {% endif %}
+  <hr>
+  <p>Print this page using your browser's print dialog for a credit‑card‑size card (85.6 mm × 54 mm).</p>
+{% endblock %}

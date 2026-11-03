@@ -1,0 +1,114 @@
+/* ======================================================================
+   base.css – global layout & interactive elements
+   Exact values from the “better‑ui” skill are used.
+   ====================================================================== */
+
+body{
+  font-family:Arial,Helvetica,sans-serif;
+  margin:0;
+  padding:1.5rem;
+  color:#333;
+  background:#fafafa;
+}
+
+/* ----- Navbar ----------------------------------------------------------- */
+.navbar{
+  background:#2c3e50;
+  color:#fff;
+  padding:1rem 0;
+  text-align:center;
+}
+.navbar nav a{
+  color:#ecf0f1;
+  margin:0 1rem;
+  text-decoration:none;
+  font-weight:bold;
+}
+
+/* ----- Container -------------------------------------------------------- */
+.container{
+  max-width:800px;
+  margin:0 auto;
+  padding:1rem;
+  background:#fff;
+  border:1px solid #e0e0e0;
+  border-radius:4px;
+}
+
+/* ----- Hero section ----------------------------------------------------- */
+.hero{
+  background:#e8f0fe;
+  padding:2rem;
+  margin:-.5rem -.5rem 1rem;
+  border-radius:4px 4px 0 0;
+  text-align:center;
+}
+.hero h1{
+  margin:0;
+  font-size:2rem;
+}
+.hero p{
+  margin: .5rem 0 0;
+  color:#333;
+}
+
+/* ----- Message bar ------------------------------------------------------ */
+.message-bar .message{
+  padding:.5rem 1rem;
+  margin:.5rem 0;
+  border-radius:3px;
+}
+.message.success{background:#d1e7dd;color:#0f5132;}
+.message.error{background:#f8d7da;color:#842029;}
+.message.info{background:#cffafe;color:#08428e;}
+
+/* ----- Buttons -------------------------------------------------------- */
+button{
+  padding:.6rem 1.2rem;
+  background:#2c3e50;
+  color:#fff;
+  border:none;
+  border-radius:3px;
+  cursor:pointer;
+  font-size:1rem;
+  transition:transform 150ms ease-out;      /* only transform animates */
+}
+button:active{transform:scale(0.96);}        /* press‑scale 0.96 exactly */
+button:hover{
+  background:#1a252f;
+}
+
+/* Hover only on devices with a real hover pointer */
+@media (hover: hover){button:hover{background:#1a252f;}}
+
+/* Reduced‑motion -------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce){
+  button{transition:none;}
+}
+
+/* ----- Footer ----------------------------------------------------------- */
+footer{
+  margin-top:2rem;
+  text-align:center;
+  font-size:.9rem;
+  color:#666;
+}
+
+/* ----- Register card ---------------------------------------------------- */
+.register-card{
+  border:1px solid #e0e0e0;
+  border-radius:4px;
+  padding:1rem;
+  background:#f9f9f9;
+  margin-top:1rem;
+}
+.video-section{
+  margin-bottom:1rem;
+}
+.video-section video{
+  max-width:100%;
+  height:auto;
+  border:1px solid #ccc;
+  border-radius:3px;
+  background:#fff;
+}

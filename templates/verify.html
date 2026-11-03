@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Verify Nurse{% endblock %}
+{% block content %}
+  <h1>Verify Nurse</h1>
+  {% if not_registered %}
+    <p>Not registered</p>
+  {% else %}
+    <p><strong>Name:</strong> {{ full_name }}</p>
+    <p><strong>NANNM ID:</strong> {{ nanm_id }}</p>
+    <p><strong>Licence status:</strong> {{ status }}</p>
+    <p><strong>Expiry:</strong> {{ licence_expiry }}</p>
+    <p><strong>Employer:</strong> {{ employer }}</p>
+    {% if photo_url %}
+      <img src="{{ photo_url }}" alt="Nurse photo" style="max-width:200px;">
+    {% else %}
+      <p>No photo available.</p>
+    {% endif %}
+  {% endif %}
+  <hr>
+  <form method="get">
+    <input type="text" name="nanm_id" placeholder="NANNM ID">
+    <button type="submit">Verify</button>
+  </form>
+{% endblock %}

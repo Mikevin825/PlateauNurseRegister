@@ -18,4 +18,8 @@ urlpatterns = [
         views.protected_nurse_photo,
         name="protected_nurse_photo",
     ),
+    path("verify/", views.verify, name="verify"),
+    path("verify/<str:nanm_id>/", views.verify_result, name="verify_result"),
+    path("nurses/<int:pk>/card/", views.card, name="card"),
+    path("card/<str:token>/", views.signed_card, name="signed_card"),
 ]

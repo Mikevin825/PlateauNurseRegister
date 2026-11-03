@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}Login ?? Plateau State Nurse Registry{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <div class="container">
+    <h1>Login</h1>
+    <p>Sign in to continue.</p>
+
+    <form method="post" class="login-form">
+      {% csrf_token %}
+      <div class="form-group">
+        <label for="id_username">Username</label>
+        <input type="text" name="username" id="id_username" required autofocus>
+      </div>
+      <div class="form-group">
+        <label for="id_password">Password</label>
+        <input type="password" name="password" id="id_password" required>
+      </div>
+      <button type="submit" class="btn-primary">Sign in</button>
+      <small>
+        <a href="{% url 'password_reset' %}">Forgot password?</a>
+      </small>
+    </form>
+  </div>
+</section>
+{% endblock %}

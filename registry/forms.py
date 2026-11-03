@@ -57,6 +57,14 @@ def _validate_upload(upload, label, allow_pdf):
     return upload
 
 
+class ReasonForm(forms.Form):
+    reason = forms.CharField(
+        label="Reason",
+        widget=forms.Textarea(attrs={"rows": 3, "placeholder": "Enter the reason for this action"}),
+        strip=False,
+    )
+
+
 class NurseRegistrationForm(forms.ModelForm):
     nin = forms.CharField(
         label="National Identification Number",

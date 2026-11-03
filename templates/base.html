@@ -1,20 +1,40 @@
+{% load static %}
 <!doctype html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Plateau State Nurse Registry{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'css/base.css' %}">
+    {% block extra_head %}{% endblock %}
 </head>
 <body>
-    <header>
+    <header class="navbar">
         <strong>Plateau State Nurse Registry</strong>
         <nav>
             <a href="/">Home</a>
-            <a href="{{ url('registry:register') }}">Register nurse</a>
+            <a href="/register/">Register nurse</a>
         </nav>
     </header>
-    <main>
+
+    {% block hero %}{% endblock %}
+
+    <main class="container">
+        {% with messages as msgs %}
+            {% if msgs %}
+                <div class="message-bar">
+                    {% for m in msgs %}
+                        <div class="message {{ m.tags }}">{{ m }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
         {% block content %}{% endblock %}
     </main>
+
+    <footer>
+        <small>&copy; 2026 Plateau State Nurse Registry</small>
+    </footer>
 </body>
 </html>

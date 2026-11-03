@@ -34,6 +34,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "django_ratelimit.middleware.RatelimitMiddleware",
     "auditlog.middleware.AuditlogMiddleware",
 ]
 
@@ -41,11 +42,10 @@ ROOT_URLCONF = "config.urls"
 
 TEMPLATES = [
     {
-        "BACKEND": "django.template.backends.jinja2.Jinja2",
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
         "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
-            "environment": "config.jinja2.environment",
             "context_processors": [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
@@ -54,10 +54,11 @@ TEMPLATES = [
         },
     },
     {
-        "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "BACKEND": "django.template.backends.jinja2.Jinja2",
+        "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
+            "environment": "config.jinja2.environment",
             "context_processors": [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
@@ -111,4 +112,18 @@ PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="http://localhost:8000")
 REMINDER_DAYS = env.int("REMINDER_DAYS", default=30)
 NIN_ENCRYPTION_KEY = env("NIN_ENCRYPTION_KEY", default="")
 
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "",
+    }
+}
+
+RATELIMIT_USE_CACHE = "default"
+RATELIMIT_ENABLE = True
+RATELIMIT_VIEW = "registry.views.ratelimited"
+
+PUBLIC_VERIFY_RATE = env("PUBLIC_VERIFY_RATE", default="30/m")
+LICENCE_EXPIRY_WARNING_DAYS = env.int("LICENCE_EXPIRY_WARNING_DAYS", default=180)
+CARD_LINK_MAX_AGE = env.int("CARD_LINK_MAX_AGE", default=604800)
+CARD_LINK_SALT = "registry.card"

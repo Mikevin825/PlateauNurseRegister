@@ -1,12 +1,15 @@
 import mimetypes
 from pathlib import Path
 
+from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
+from django.core import signing
 from django.core.exceptions import PermissionDenied
-from django.http import FileResponse, Http404
+from django.http import FileResponse, Http404, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
+from io import BytesIO
 
 from .forms import NurseRegistrationForm
 from .models import LicenceDocument, Nurse
@@ -88,3 +91,92 @@ def _serve_media(field_file):
 
     content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     return FileResponse(path.open("rb"), content_type=content_type)
+
+
+from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
+def verify(request):
+    """Public verification page."""
+    nanm_id = request.GET.get("nanm_id", "").strip()
+    if not nanm_id:
+        return render(request, "verify.html")
+    nurse = Nurse.objects.select_related("employer").filter(nanm_id=nanm_id).first()
+    if not nurse:
+        return render(request, "verify.html", {"not_registered": True})
+    # Build public status using the model property
+    status = nurse.public_licence_status
+    # Photo URL: if photo exists, build absolute URL; otherwise use placeholder
+    photo_url = ""
+    if nurse.photo:
+        try:
+            photo_url = request.build_absolute_uri(nurse.photo.url)
+        except Exception:
+            photo_url = ""
+    ctx = {
+        "nurse": nurse,
+        "status": status,
+        "nanm_id": nurse.nanm_id,
+        "full_name": nurse.full_name,
+        "licence_expiry": nurse.licence_expiry,
+        "employer": nurse.employer.name if nurse.employer else "",
+        "photo_url": photo_url,
+    }
+    return render(request, "verify.html", ctx)
+
+
+def verify_result(request, nanm_id):
+    """Show verification result for a given NANNM ID."""
+    nurse = Nurse.objects.select_related("employer").filter(nanm_id=nanm_id).first()
+    if not nurse:
+        return render(request, "verify.html", {"not_registered": True})
+    # Build public status using the model property
+    status = nurse.public_licence_status
+    # Photo URL: if photo exists, build absolute URL; otherwise use placeholder
+    photo_url = ""
+    if nurse.photo:
+        try:
+            photo_url = request.build_absolute_uri(nurse.photo.url)
+        except Exception:
+            photo_url = ""
+    ctx = {
+        "nurse": nurse,
+        "status": status,
+        "nanm_id": nurse.nanm_id,
+        "full_name": nurse.full_name,
+        "licence_expiry": nurse.licence_expiry,
+        "employer": nurse.employer.name if nurse.employer else "",
+        "photo_url": photo_url,
+    }
+    return render(request, "verify.html", ctx)
+
+
+@login_required
+def card(request, pk):
+    nurse = get_object_or_404(Nurse, pk=pk)
+    # generate signed link
+    token = signing.dumps({"nurse_id": nurse.pk}, salt=settings.CARD_LINK_SALT)
+    signed_url = request.build_absolute_uri(reverse("registry:signed_card", args=[token]))
+    # direct URL (requires login)
+    direct_url = reverse("registry:card", args=[pk])
+    ctx = {
+        "nurse": nurse,
+        "signed_url": signed_url,
+        "direct_url": direct_url,
+    }
+    return render(request, "card.html", ctx)
+
+
+def signed_card(request, token):
+    try:
+        data = signing.loads(token, salt=settings.CARD_LINK_SALT, max_age=settings.CARD_LINK_MAX_AGE)
+        nurse_id = data["nurse_id"]
+        nurse = get_object_or_404(Nurse, pk=nurse_id)
+        # render same card view without login requirement
+        ctx = {
+            "nurse": nurse,
+            "signed": True,
+        }
+        return render(request, "card.html", ctx)
+    except Exception:
+        return render(request, "card_invalid.html", status=400)
