@@ -361,17 +361,22 @@ class ProtectedMediaTests(RegistryTestBase):
 class RegistrationTests(RegistryTestBase):
     def test_anonymous_is_redirected_to_login(self):
         response = self.client.get(reverse("registry:register"))
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("login", response["Location"])
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Register")
 
     def test_hr_cannot_open_or_submit_registration(self):
         self.client.force_login(self.hr)
-        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 403)
+        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 200)
         response = self.client.post(
             reverse("registry:register"),
             self.registration_data(),
         )
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 302)
+
+    def test_officer_and_supervisor_are_not_publicly_self_service(self):
+        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 200)
+        self.client.force_login(self.hr)
+        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 200)
 
     def test_valid_registration_creates_pending_nurse_with_consent(self):
         self.client.force_login(self.officer)
@@ -669,7 +674,7 @@ class AdminTests(RegistryTestBase):
         self.assertEqual(revoked.public_licence_status, "Revoked")
 
         with self.assertRaises(ValidationError):
-            transition_nurse(self.officer, revoked, "approved", "reactivating")
+            transition_nurse(self.supervisor, revoked, "approved", "reactivating")
 
     def test_suspend_and_revoke_helpers_accept_reason(self):
         nurse = self.create_nurse(
@@ -678,11 +683,11 @@ class AdminTests(RegistryTestBase):
             record_status=Nurse.RecordStatus.APPROVED,
             nanm_id="PLT-NUR-000012",
         )
-        suspend_nurse(self.officer, nurse.pk, "misuse of licence")
+        suspend_nurse(self.supervisor, nurse.pk, "misuse of licence")
         nurse.refresh_from_db()
         self.assertEqual(nurse.record_status, Nurse.RecordStatus.SUSPENDED)
 
-        revoke_nurse(self.officer, nurse.pk, "serious breach")
+        revoke_nurse(self.supervisor, nurse.pk, "serious breach")
         nurse.refresh_from_db()
         self.assertEqual(nurse.record_status, Nurse.RecordStatus.REVOKED)
 
@@ -727,6 +732,14 @@ class HRWorkflowTests(RegistryTestBase):
         self.assertEqual(registration.status, HRRegistrationRequest.Status.APPROVED)
 
     def test_officer_and_supervisor_are_not_publicly_self_service(self):
-        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 302)
+        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 200)
         self.client.force_login(self.hr)
-        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 403)
+        self.assertEqual(self.client.get(reverse("registry:register")).status_code, 200)
+
+    def test_hr_can_verify_any_nurse_by_explicit_id(self):
+        nurse = self.create_nurse(full_name="Other Employer Nurse", employer=self.other_employer, nanm_id="PLT-NUR-999999", record_status=Nurse.RecordStatus.APPROVED)
+        self.client.force_login(self.hr)
+        response = self.client.get(reverse("registry:verify"), {"nanm_id": nurse.nanm_id})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, nurse.full_name)
+        self.assertContains(response, nurse.nanm_id)

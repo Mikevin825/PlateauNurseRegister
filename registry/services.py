@@ -2,7 +2,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from .permissions import can_reveal_nin, is_hr, is_officer_or_above
+from .permissions import can_reveal_nin, is_hr, is_staff_reviewer
 
 
 def reveal_nin(actor, nurse):
@@ -44,8 +44,8 @@ def transition_nurse(actor, nurse, new_status, reason=""):
     """
     from .models import Nurse, Flag
 
-    if not (is_officer_or_above(actor) or actor.is_superuser):
-        raise PermissionDenied("Only officers or supervisors may transition nurses.")
+    if not (is_staff_reviewer(actor) or actor.is_superuser):
+        raise PermissionDenied("Only supervisors or super admins may transition nurses.")
 
     reason = reason.strip()
     old_status = nurse.record_status

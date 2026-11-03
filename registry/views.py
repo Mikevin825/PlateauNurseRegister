@@ -24,7 +24,8 @@ from .permissions import (
     HR,
     can_view_documents,
     can_view_nurse_photo,
-    is_officer_or_above,
+    is_hr,
+    is_staff_reviewer,
     is_super_admin,
 )
 
@@ -43,13 +44,13 @@ def home(request):
     return render(request, "home.html")
 
 
-@login_required
 def register(request):
-    if not is_officer_or_above(request.user):
-        raise PermissionDenied
-
     if request.method == "POST":
-        form = NurseRegistrationForm(request.POST, request.FILES, user=request.user)
+        form = NurseRegistrationForm(
+            request.POST,
+            request.FILES,
+            user=request.user if request.user.is_authenticated else None,
+        )
         if form.is_valid():
             with transaction.atomic():
                 nurse = form.save()
@@ -60,16 +61,12 @@ def register(request):
                 )
             return redirect("registry:registration_success", pk=nurse.pk)
     else:
-        form = NurseRegistrationForm(user=request.user)
+        form = NurseRegistrationForm(user=request.user if request.user.is_authenticated else None)
 
     return render(request, "register.html", {"form": form})
 
 
-@login_required
 def registration_success(request, pk):
-    if not is_officer_or_above(request.user):
-        raise PermissionDenied
-
     nurse = get_object_or_404(Nurse, pk=pk)
     return render(request, "registration_success.html", {"nurse": nurse})
 
@@ -126,6 +123,24 @@ def verify(request):
         return render(request, "verify.html")
     nurse = Nurse.objects.select_related("employer").filter(nanm_id=nanm_id).first()
     if not nurse:
+        return render(request, "verify.html", {"not_registered": True})
+
+    if is_hr(request.user) and request.user.is_authenticated:
+        return render(
+            request,
+            "verify.html",
+            {
+                "nurse": nurse,
+                "status": nurse.public_licence_status,
+                "nanm_id": nurse.nanm_id,
+                "full_name": nurse.full_name,
+                "licence_expiry": nurse.licence_expiry,
+                "employer": nurse.employer.name if nurse.employer else "",
+                "photo_url": request.build_absolute_uri(nurse.photo.url) if nurse.photo else "",
+            },
+        )
+
+    if not request.user.is_authenticated and not nurse:
         return render(request, "verify.html", {"not_registered": True})
 
     return render(
@@ -190,7 +205,7 @@ def nurse_qr(request, nanm_id):
 
 @login_required
 def approval_confirmation(request, pk):
-    if not is_officer_or_above(request.user):
+    if not is_staff_reviewer(request.user):
         raise PermissionDenied
 
     nurse = get_object_or_404(Nurse, pk=pk)
@@ -215,7 +230,7 @@ def approval_confirmation(request, pk):
 @login_required
 @csrf_exempt
 def email_card_link(request, pk):
-    if not is_officer_or_above(request.user):
+    if not is_staff_reviewer(request.user):
         raise PermissionDenied
 
     if request.method != "POST":
@@ -240,7 +255,7 @@ def email_card_link(request, pk):
 
 @login_required
 def card(request, pk):
-    if not is_officer_or_above(request.user):
+    if not is_staff_reviewer(request.user):
         raise PermissionDenied
 
     nurse = get_object_or_404(Nurse.objects.select_related("employer"), pk=pk)
