@@ -9,7 +9,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import Group
 from django.core import signing
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -329,16 +329,16 @@ def approve_hr_registration(request, pk):
                         "approved": True,
                     },
                 )
-                user, created = User.objects.get_or_create(
-                    username=registration.email.split("@", 1)[0],
-                    defaults={
-                        "email": registration.email,
-                        "is_staff": True,
-                        "password": registration.password,
-                    },
-                )
+                username = registration.email.split("@", 1)[0]
+                if User.objects.filter(email__iexact=registration.email).exists():
+                    raise ValidationError("An account already exists for this email.")
+                if User.objects.filter(username__iexact=username).exists():
+                    username = registration.email
+                if User.objects.filter(username__iexact=username).exists():
+                    raise ValidationError("Could not allocate a unique username for this account.")
+                user = User.objects.create_user(username=username, email=registration.email)
                 user.email = registration.email
-                user.set_password(registration.password)
+                user.password = registration.password
                 user.is_staff = True
                 user.save()
                 user.groups.add(Group.objects.get(name=HR))
@@ -359,3 +359,27 @@ def approve_hr_registration(request, pk):
             messages.success(request, f"HR registration for {registration.email} rejected.")
             return redirect("admin:registry_hrregistrationrequest_changelist")
     return render(request, "admin_hr_registration_review.html", {"registration": registration})
+
+
+
+
+def renew_nurse(request, nurse_pk):
+    """Renew a nurse's licence."""
+    from .forms import RenewalForm
+    from django.shortcuts import render, redirect, get_object_or_404
+    from django.contrib import messages
+    from django.contrib.auth.decorators import login_required
+    from .models import Nurse
+    
+    nurse = get_object_or_404(Nurse, pk=nurse_pk)
+    
+    if request.method == "POST":
+        form = RenewalForm(request.POST)
+        if form.is_valid():
+            nurse.licence_expiry = form.cleaned_data["new_expiry_date"]
+            nurse.save(update_fields=["licence_expiry", "updated_at"])
+            messages.success(request, f"Nurse {nurse.nanm_id} licence renewed.")
+            return redirect("admin:registry_nurse_change", nurse.pk)
+    else:
+        form = RenewalForm(initial={"new_expiry_date": nurse.licence_expiry})
+    return render(request, "admin/renew_nurse.html", {"form": form, "nurse": nurse})

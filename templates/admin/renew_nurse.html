@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Renew Nurse Licence{% endblock %}
+
+{% block content %}
+<section class="page-shell">
+    <h1>Renew Nurse Licence</h1>
+    <p>Nurse: {{ nurse.nanm_id }} {{ nurse.full_name }}</p>
+    
+    <form method="post" class="card-form">
+        {% csrf_token %}
+        {{ form.non_field_errors }}
+        
+        <div class="field">
+            <label for="id_licence_expiry">New Licence Expiry Date</label>
+            {{ form.licence_expiry }}
+        </div>
+        
+        <button type="submit" class="btn-primary">Renew Licence</button>
+        <a href="{% url 'admin:registry_nurse_change' nurse.pk %}" class="btn-secondary">Cancel</a>
+    </form>
+</section>
+{% endblock %}

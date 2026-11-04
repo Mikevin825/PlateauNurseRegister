@@ -1,0 +1,56 @@
+# Example same-origin deployment. Build Vite and set root to its dist directory.
+# Replace the hostname, certificate paths, and Django upstream for your hosting environment.
+upstream plateau_django {
+    server 127.0.0.1:8000;
+}
+
+server {
+    listen 80;
+    server_name registry.example.gov.ng;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name registry.example.gov.ng;
+    root /srv/plateau-nurse-registry/frontend/dist;
+    index index.html;
+
+    ssl_certificate /etc/letsencrypt/live/registry.example.gov.ng/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/registry.example.gov.ng/privkey.pem;
+
+    client_max_body_size 12m;
+
+    location /api/v1/ {
+        proxy_pass http://plateau_django/api/v1/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /django-admin/ {
+        proxy_pass http://plateau_django/django-admin/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /accounts/ {
+        proxy_pass http://plateau_django/accounts/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Never expose Django's media directory directly. Registry photos and
+    # private documents are delivered by their API views with access checks.
+    location /media/ { return 404; }
+
+    # React routes such as /admin/login and /hr/settings resolve to the SPA.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

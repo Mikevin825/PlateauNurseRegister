@@ -5,7 +5,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Plateau State Nurse Registry{% endblock %}</title>
-    <link rel="stylesheet" href="{% static 'css/base.css' %}">
+    <link rel="stylesheet" href="{% static 'css/base.css' %}"><link rel="stylesheet" href="{% static 'css/demo.css' %}">
     {% block extra_head %}{% endblock %}
 </head>
 <body>
@@ -20,6 +20,17 @@
     </header>
 
     {% block hero %}{% endblock %}
+    {% if not request.user.is_super_admin %}
+    <div class="demo-banner">
+        <div class="container">
+            <div class="alert alert-info">
+                <strong>Demo Mode:</strong> This is a demonstration registry for the NANNM Plateau Chapter. 
+                All data is fake. For production deployment, configure PostgreSQL and adjust settings.
+            </div>
+        </div>
+    </div>
+{% endif %}
+    
 
     <main class="container">
         {% with messages as msgs %}

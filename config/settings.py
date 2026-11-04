@@ -10,10 +10,23 @@ env = environ.Env(
 )
 environ.Env.read_env(BASE_DIR / ".env")
 
-SECRET_KEY = env("DJANGO_SECRET_KEY", default="django-insecure-local-demo-only")
+SECRET_KEY = env("DJANGO_SECRET_KEY", default="")
 DEBUG = env.bool("DJANGO_DEBUG", default=False)
+if not SECRET_KEY:
+    raise RuntimeError("DJANGO_SECRET_KEY must be configured before starting Django.")
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1", "testserver"])
 CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
+FRONTEND_ORIGINS = env.list(
+    "FRONTEND_ORIGINS",
+    default=["http://localhost:5173", "http://127.0.0.1:5173"],
+)
+RATELIMIT_IP_META_KEY = env("RATELIMIT_IP_META_KEY", default="") or None
+SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=not DEBUG)
+SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=not DEBUG)
+CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=not DEBUG)
+SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=0)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=False)
+SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=False)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -33,6 +46,7 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "api.middleware.FrontendCorsMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -112,25 +126,28 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="http://localhost:8000")
+FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", default="http://localhost:5173").rstrip("/")
 REMINDER_DAYS = env.int("REMINDER_DAYS", default=30)
 NIN_ENCRYPTION_KEY = env("NIN_ENCRYPTION_KEY", default="")
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@example.com")
 
 EMAIL_BACKEND = env(
     "EMAIL_BACKEND",
-    default="django.core.mail.backends.console.EmailBackend",
+    default="django.core.mail.backends.smtp.EmailBackend",
 )
-EMAIL_HOST = env("EMAIL_HOST", default="localhost")
-EMAIL_PORT = env.int("EMAIL_PORT", default=25)
-EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=False)
+EMAIL_HOST = env("EMAIL_HOST", default="smtp.gmail.com")
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
 EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=10)
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="") or EMAIL_HOST_USER or "noreply@example.com"
 
-CACHES = {
+CACHE_URL = env("CACHE_URL", default="")
+CACHES = {"default": env.cache_url(CACHE_URL)} if CACHE_URL else {
     "default": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "",
+        "LOCATION": "plateau-local-cache",
     }
 }
 

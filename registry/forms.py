@@ -2,6 +2,7 @@ import re
 from pathlib import Path
 
 from django import forms
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from PIL import Image, UnidentifiedImageError
@@ -66,6 +67,7 @@ class ReasonForm(forms.Form):
 
 
 class NurseRegistrationForm(forms.ModelForm):
+    custom_employer_name = forms.CharField(max_length=255, required=False)
     nin = forms.CharField(
         label="National Identification Number",
         min_length=11,
@@ -120,6 +122,8 @@ class NurseRegistrationForm(forms.ModelForm):
         self.user = user
         super().__init__(*args, **kwargs)
         self.fields["employer"].queryset = Employer.objects.all()
+        self.fields["employer"].required = False
+        self.custom_employer_name = self.initial.get("custom_employer_name", "")
         self.duplicate_warning = ""
 
     def clean_nin(self):
@@ -156,9 +160,17 @@ class NurseRegistrationForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
+        if not cleaned_data.get("employer") and not (cleaned_data.get("custom_employer_name") or "").strip():
+            self.add_error("employer", "Choose an employer or enter its name.")
         nin = cleaned_data.get("nin")
         licence_number = cleaned_data.get("licence_number")
         duplicate_reasons = []
+        employer = cleaned_data.get("employer")
+        custom_employer_name = (cleaned_data.get("custom_employer_name") or "").strip()
+        if employer and not employer.approved:
+            self.add_error("employer", "Choose an approved employer or enter its name for review.")
+        if not employer and not custom_employer_name:
+            self.add_error("employer", "Choose an employer or enter its name.")
 
         if nin and Nurse.objects.filter(nin_hash=hash_nin(nin)).exists():
             duplicate_reasons.append("NIN")
@@ -189,6 +201,20 @@ class NurseRegistrationForm(forms.ModelForm):
         nurse.consent_at = timezone.now()
         nurse.set_nin(self.cleaned_data["nin"])
         nurse.photo = self.cleaned_data["selfie"]
+
+        employer = self.cleaned_data.get("employer")
+        custom_employer_name = self.cleaned_data.get("custom_employer_name", "").strip()
+
+        if custom_employer_name:
+            nurse.employer, _ = Employer.objects.get_or_create(
+                name=custom_employer_name,
+                defaults={"type": Employer.Type.HOSPITAL, "lga": ""},
+            )
+        elif employer:
+            nurse.employer = employer
+        else:
+            raise ValueError("The registration form must include an employer.")
+
         if commit:
             nurse.save()
         return nurse
@@ -207,6 +233,13 @@ class HRRegistrationForm(forms.Form):
     employer_type = forms.ChoiceField(
         label="Hospital type",
         choices=Employer.Type.choices,
+    )
+    custom_employer_name = forms.CharField(
+        label="Employer name (if not listed)",
+        max_length=255,
+        required=False,
+        widget=forms.TextInput(attrs={"placeholder": "e.g. Private Clinic"}),
+        help_text="Leave blank if selecting an existing employer above.",
     )
     lga = forms.CharField(
         label="Local government area",
@@ -228,6 +261,8 @@ class HRRegistrationForm(forms.Form):
         email = (self.cleaned_data.get("email") or "").strip().lower()
         if HRRegistrationRequest.objects.filter(email__iexact=email).exists():
             raise ValidationError("An HR registration already exists for this email.")
+        if get_user_model().objects.filter(email__iexact=email).exists():
+            raise ValidationError("An account already exists for this email.")
         return email
 
     def save(self):
@@ -239,3 +274,12 @@ class HRRegistrationForm(forms.Form):
             contact_email=(self.cleaned_data.get("contact_email") or "").strip(),
             password=self.cleaned_data["password"],
         )
+
+
+class RenewalForm(forms.ModelForm):
+    class Meta:
+        model = Nurse
+        fields = ("licence_expiry",)
+        widgets = {
+            "licence_expiry": forms.DateInput(attrs={"type": "date"}),
+        }

@@ -743,3 +743,23 @@ class HRWorkflowTests(RegistryTestBase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, nurse.full_name)
         self.assertContains(response, nurse.nanm_id)
+
+
+
+class SmokeTests(RegistryTestBase):
+    """Smoke test suite for core workflows."""
+    
+    def test_public_verification(self):
+        """Test public verification endpoint."""
+        from django.test import Client
+        client = Client()
+        response = client.get('/verify/')
+        self.assertEqual(response.status_code, 200)
+    
+    def test_admin_access(self):
+        """Test admin access."""
+        from django.test import Client
+        client = Client()
+        client.force_login(self.super_admin)
+        response = client.get('/admin/')
+        self.assertEqual(response.status_code, 200)
