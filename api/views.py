@@ -1,4 +1,13 @@
-from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth import authenticate, get_user_model, update_session_auth_hash
+from django.contrib.auth.tokens import default_token_generator
+from django.contrib.auth.password_validation import validate_password
+from django.core.mail import send_mail
+import smtplib
+from django.conf import settings
+from django.utils.encoding import force_bytes, force_str
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from django.http import FileResponse
+from django_ratelimit.decorators import ratelimit
 from django.contrib.auth.models import Group
 from django.db import transaction
 from django.core import signing
@@ -30,15 +39,158 @@ def verify_nurse(request, nanm_id):
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def verify_nurse_photo(request, nanm_id):
+    nurse = Nurse.objects.filter(nanm_id=nanm_id).first()
+    if not nurse or not nurse.photo:
+        raise NotFound("Registry photo not found.")
+    try:
+        photo = nurse.photo.open("rb")
+    except (OSError, ValueError) as exc:
+        raise NotFound("Registry photo is unavailable.") from exc
+    from mimetypes import guess_type
+    response = FileResponse(photo, content_type=guess_type(nurse.photo.name)[0] or "application/octet-stream")
+    response["Cache-Control"] = "public, max-age=300"
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 User = get_user_model()
 
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def token_logout(request):
+    if request.auth is not None and hasattr(request.auth, "delete"):
+        request.auth.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    current = request.data.get("current_password") or ""
+    new_password = request.data.get("new_password") or ""
+    if not request.user.check_password(current):
+        raise ValidationError({"current_password": "Current password is incorrect."})
+    try:
+        validate_password(new_password, request.user)
+    except DjangoValidationError as exc:
+        raise ValidationError({"new_password": list(exc.messages)}) from exc
+    request.user.set_password(new_password)
+    request.user.save(update_fields=["password"])
+    update_session_auth_hash(request, request.user)
+    return Response({"detail": "Password updated."})
+
+
+@api_view(["POST"])
 @permission_classes([AllowAny])
+@ratelimit(key="ip", rate="5/h", method="POST", block=True)
+def request_password_reset(request):
+    email = (request.data.get("email") or "").strip()
+    user = User.objects.filter(email__iexact=email, is_active=True).first() if email else None
+    if user and user.has_usable_password():
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+        reset_url = f"{settings.FRONTEND_BASE_URL}/reset-password/{uid}/{token}"
+        message = (
+            f"A password reset was requested for your Plateau State Nurse Registry account.\n\n"
+            f"Choose a new password using this one-time link:\n{reset_url}\n\n"
+            "If you did not request this, you can ignore this email. The link expires automatically."
+        )
+        try:
+            send_mail(
+                subject="Reset your Nurse Registry password",
+                message=message,
+                from_email=None,
+                recipient_list=[user.email],
+                fail_silently=False,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).exception("Password reset email delivery failed")
+            detail = "Password reset email could not be sent. Please check the mail server configuration and try again."
+            if isinstance(exc, smtplib.SMTPAuthenticationError):
+                detail = "Gmail rejected the SMTP sign-in. Check the Gmail address and Google App Password in .env."
+            elif isinstance(exc, smtplib.SMTPRecipientsRefused):
+                detail = "The email provider rejected this recipient address. Check the email saved on the account."
+            elif isinstance(exc, smtplib.SMTPDataError):
+                detail = f"Gmail rejected the email message (SMTP {exc.smtp_code}). Check the sender address and Gmail limits."
+            elif settings.DEBUG and not (settings.EMAIL_HOST_USER and settings.EMAIL_HOST_PASSWORD):
+                detail = (
+                    "Gmail delivery needs EMAIL_HOST_USER set to the Gmail address and EMAIL_HOST_PASSWORD set to a "
+                    "Google App Password in .env. Restart Django after saving the values."
+                )
+            elif settings.DEBUG:
+                detail = f"Email delivery failed ({type(exc).__name__}). See the Django server log for the SMTP detail."
+            return Response(
+                {"detail": detail},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+    response_data = {"detail": "If an active account uses that email, a password reset link has been sent."}
+    if settings.DEBUG and settings.EMAIL_BACKEND.endswith("console.EmailBackend"):
+        response_data["delivery_hint"] = "Development email is printed in the Django server terminal."
+    return Response(response_data)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@ratelimit(key="ip", rate="10/h", method="POST", block=True)
+def confirm_password_reset(request, uidb64, token):
+    try:
+        user_id = force_str(urlsafe_base64_decode(uidb64))
+        user = User.objects.get(pk=user_id, is_active=True)
+    except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+        raise ValidationError({"token": "This password reset link is invalid or expired."})
+    if not default_token_generator.check_token(user, token):
+        raise ValidationError({"token": "This password reset link is invalid or expired."})
+    new_password = request.data.get("new_password") or ""
+    try:
+        validate_password(new_password, user)
+    except DjangoValidationError as exc:
+        raise ValidationError({"new_password": list(exc.messages)}) from exc
+    user.set_password(new_password)
+    user.save(update_fields=["password"])
+    Token.objects.filter(user=user).delete()
+    return Response({"detail": "Password updated. Sign in with your new password."})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def admin_document_content(request, pk):
+    from registry.permissions import can_view_documents
+    if not can_view_documents(request.user):
+        raise PermissionDenied("You cannot view private registry documents.")
+    document = LicenceDocument.objects.select_related("nurse").filter(pk=pk).first()
+    if not document:
+        raise NotFound("Document not found.")
+    from mimetypes import guess_type
+    try:
+        file_handle = document.file.open("rb")
+    except (OSError, ValueError) as exc:
+        raise NotFound("Document is unavailable.") from exc
+    response = FileResponse(file_handle, content_type=guess_type(document.file.name)[0] or "application/octet-stream")
+    response["Content-Disposition"] = "inline"
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Cache-Control"] = "private, no-store"
+    return response
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@ratelimit(key="ip", rate="10/m", method="POST", block=True)
 def token_login(request):
-    email = (request.data.get("email") or "").strip().lower()
+    identifier = (
+        request.data.get("identifier")
+        or request.data.get("email")
+        or request.data.get("username")
+        or ""
+    ).strip()
     password = request.data.get("password") or ""
-    user_record = User.objects.filter(email__iexact=email).first()
+    user_record = User.objects.filter(email__iexact=identifier).first()
+    if user_record is None:
+        user_record = User.objects.filter(username__iexact=identifier).first()
     user = authenticate(request, username=user_record.get_username(), password=password) if user_record else None
     if not user:
         return Response({"detail": "Invalid email or password."}, status=status.HTTP_400_BAD_REQUEST)
@@ -80,10 +232,12 @@ def register_nurse(request):
 def current_user(request):
     user = request.user
     nurse = getattr(user, "nurse_profile", None)
-    employers = list(user.employers.values("id", "name")) if is_hr(user) else []
+    employers = list(user.employers.values("id", "name", "type", "lga", "contact_email", "approved")) if is_hr(user) else []
     return Response({
         "id": user.pk,
         "email": user.email,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
         "role": "hr" if is_hr(user) else ("super_admin" if is_super_admin(user) else "supervisor" if user.groups.filter(name=SUPERVISOR).exists() else "reviewer" if is_staff_reviewer(user) else "nurse" if nurse else "user"),
         "nurse": NurseProfileSerializer(nurse, context={"request": request}).data if nurse else None,
         "employers": employers,
@@ -309,9 +463,8 @@ def review_hr_registration(request, pk):
             user.is_staff = True
             user.save()
             from django.contrib.auth.models import Group
-            group = Group.objects.filter(name="HR").first()
-            if group:
-                user.groups.add(group)
+            group, _ = Group.objects.get_or_create(name=HR)
+            user.groups.add(group)
             employer.hr_users.add(user)
             application.status = HRRegistrationRequest.Status.APPROVED
     else:
@@ -348,7 +501,7 @@ def _nurse_admin_data(nurse, request):
         "documents": [{
             "id": doc.pk, "document_type": doc.document_type, "decision": doc.decision,
             "uploaded_at": doc.uploaded_at,
-            "url": request.build_absolute_uri(doc.file.url) if doc.file else "",
+            "content_path": reverse("admin_document_content", args=[doc.pk]) if doc.file else "",
         } for doc in nurse.documents.all()],
     }
 

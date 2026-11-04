@@ -28,8 +28,9 @@ class PublicNurseSerializer(serializers.ModelSerializer):
             return ""
         request = self.context.get("request")
         if request is not None:
-            return request.build_absolute_uri(obj.photo.url)
-        return obj.photo.url
+            from django.urls import reverse
+            return request.build_absolute_uri(reverse("verify_nurse_photo", args=[obj.nanm_id]))
+        return ""
 
     def get_employer(self, obj):
         return obj.employer.name if obj.employer else ""

@@ -17,7 +17,7 @@ class FrontendCorsMiddleware:
             response = self.get_response(request)
         if origin and origin in settings.FRONTEND_ORIGINS:
             response["Access-Control-Allow-Origin"] = origin
-            response["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
             response["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
             response["Vary"] = "Origin"
         return response

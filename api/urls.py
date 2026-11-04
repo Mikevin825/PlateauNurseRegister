@@ -4,7 +4,12 @@ from . import views
 
 urlpatterns = [
     path("verify/<str:nanm_id>/", views.verify_nurse, name="verify_nurse"),
+    path("verify/<str:nanm_id>/photo/", views.verify_nurse_photo, name="verify_nurse_photo"),
     path("auth/token/", views.token_login, name="token_login"),
+    path("auth/logout/", views.token_logout, name="token_logout"),
+    path("auth/password/", views.change_password, name="change_password"),
+    path("auth/password-reset/", views.request_password_reset, name="request_password_reset"),
+    path("auth/password-reset/<str:uidb64>/<str:token>/", views.confirm_password_reset, name="confirm_password_reset"),
     path("register/", views.register_nurse, name="register_nurse"),
     path("me/", views.current_user, name="current_user"),
     path("nurse/profile/", views.nurse_profile, name="nurse_profile"),
@@ -14,6 +19,7 @@ urlpatterns = [
     path("admin/renewals/", views.renewal_queue, name="renewal_queue"),
     path("admin/renewals/<int:pk>/", views.review_renewal, name="review_renewal"),
     path("admin/summary/", views.admin_dashboard_summary, name="admin_dashboard_summary"),
+    path("admin/documents/<int:pk>/content/", views.admin_document_content, name="admin_document_content"),
     path("admin/nurses/", views.admin_nurses, name="admin_nurses"),
     path("admin/nurses/<int:pk>/", views.admin_nurses, name="admin_nurse_detail"),
     path("admin/hr-users/", views.admin_hr_users, name="admin_hr_users"),

@@ -20,6 +20,7 @@ DEMO_USERNAMES = {
     "demo_supervisor",
     "demo_hr1",
     "demo_hr2",
+    "demo_nurse",
 }
 DEMO_ADMIN_USERNAMES = [
     "demo_officer1",
@@ -139,6 +140,7 @@ class Command(BaseCommand):
             self.stdout.write(f"  {username} / {DEMO_PASSWORD}")
         self.stdout.write("")
         self.stdout.write(f"Superadmin: demo_superadmin / {DEMO_PASSWORD}")
+        self.stdout.write(f"Nurse: demo_nurse / {DEMO_PASSWORD}")
         self.stdout.write("")
         self.stdout.write(
             f"Nurses: {Nurse.objects.count()} | Employers: {Employer.objects.count()}"
@@ -203,6 +205,11 @@ class Command(BaseCommand):
             email="hr2@example.test",
             password=DEMO_PASSWORD,
         )
+        nurse_user = User.objects.create_user(
+            username="demo_nurse",
+            email="demo.nurse@example.test",
+            password=DEMO_PASSWORD,
+        )
 
         super_admin.groups.add(Group.objects.get(name=SUPER_ADMIN))
         officer1.groups.add(Group.objects.get(name=OFFICER))
@@ -221,6 +228,7 @@ class Command(BaseCommand):
             "supervisor": supervisor,
             "hr1": hr1,
             "hr2": hr2,
+            "nurse": nurse_user,
         }
 
     def _create_nurses(self, employers, users):
@@ -245,6 +253,7 @@ class Command(BaseCommand):
                     f"{FIRST_NAMES[index % len(FIRST_NAMES)]} "
                     f"{LAST_NAMES[(index * 3) % len(LAST_NAMES)]}"
                 ),
+                user=users["nurse"] if index == 0 else None,
                 phone=f"0803{index + 1:07d}",
                 email=f"nurse{index + 1}@example.test",
                 licence_number=f"PLT-LIC-{index + 1:05d}",

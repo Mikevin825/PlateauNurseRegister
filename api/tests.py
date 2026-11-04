@@ -5,6 +5,7 @@ from cryptography.fernet import Fernet
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core import mail
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from PIL import Image
@@ -86,6 +87,42 @@ class RegistryAPITests(TestCase):
         self.assertEqual(response.data["id"], self.nurse.pk)
         self.client.credentials()
         self.assertEqual(self.client.get("/api/v1/nurse/profile/").status_code, 401)
+
+    @override_settings(RATELIMIT_ENABLE=False, EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+    def test_password_reset_email_updates_password_and_revokes_tokens(self):
+        response = self.client.post("/api/v1/auth/password-reset/", {"email": self.nurse_user.email}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        reset_path = mail.outbox[0].body.split("one-time link:\n", 1)[1].splitlines()[0]
+        self.assertIn("/reset-password/", reset_path)
+        self.assertTrue(Token.objects.filter(user=self.nurse_user).exists())
+
+        uid_token_path = reset_path.rstrip("/").split("/reset-password/", 1)[1]
+        uid, reset_token = uid_token_path.split("/")
+        response = self.client.post(
+            f"/api/v1/auth/password-reset/{uid}/{reset_token}/",
+            {"new_password": "NewSecurePassword!29"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.nurse_user.refresh_from_db()
+        self.assertTrue(self.nurse_user.check_password("NewSecurePassword!29"))
+        self.assertFalse(Token.objects.filter(user=self.nurse_user).exists())
+        self.client.credentials()
+        replay = self.client.post(
+            f"/api/v1/auth/password-reset/{uid}/{reset_token}/",
+            {"new_password": "AnotherSecurePassword!29"},
+            format="json",
+        )
+        self.assertEqual(replay.status_code, 400)
+
+    @override_settings(RATELIMIT_ENABLE=False, EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+    def test_password_reset_request_does_not_reveal_unknown_email(self):
+        existing = self.client.post("/api/v1/auth/password-reset/", {"email": self.nurse_user.email}, format="json")
+        unknown = self.client.post("/api/v1/auth/password-reset/", {"email": "missing@example.test"}, format="json")
+        self.assertEqual(existing.status_code, unknown.status_code)
+        self.assertEqual(existing.data, unknown.data)
+        self.assertEqual(len(mail.outbox), 1)
 
     def test_hr_directory_only_contains_associated_employer_records(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {Token.objects.create(user=self.hr).key}")
@@ -187,6 +224,14 @@ class RegistryAPITests(TestCase):
     def test_super_admin_login_returns_super_admin_role(self):
         login = self.client.post("/api/v1/auth/token/", {
             "email": self.admin.email, "password": "password",
+        }, format="json")
+        self.assertEqual(login.status_code, 200)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {login.data['token']}")
+        self.assertEqual(self.client.get("/api/v1/me/").data["role"], "super_admin")
+
+    def test_super_admin_can_log_in_with_username_identifier(self):
+        login = self.client.post("/api/v1/auth/token/", {
+            "identifier": self.admin.username, "password": "password",
         }, format="json")
         self.assertEqual(login.status_code, 200)
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {login.data['token']}")
