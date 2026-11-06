@@ -5,27 +5,54 @@ from django.conf import settings
 from django.db import migrations, models
 
 
-class Migration(migrations.Migration):
+def preserve_existing_confirmations(apps, schema_editor):
+    Nurse = apps.get_model("registry", "Nurse")
 
+    Nurse.objects.filter(employer_confirmed_at__isnull=False).update(
+        employment_status="confirmed",
+        employment_decided_at=models.F("employer_confirmed_at"),
+        employment_decided_by=models.F("employer_confirmed_by"),
+    )
+
+
+class Migration(migrations.Migration):
     dependencies = [
-        ('registry', '0007_licencedocument_proposed_expiry'),
+        ("registry", "0007_licencedocument_proposed_expiry"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='nurse',
-            name='employment_decided_at',
+            model_name="nurse",
+            name="employment_decided_at",
             field=models.DateTimeField(blank=True, null=True),
         ),
         migrations.AddField(
-            model_name='nurse',
-            name='employment_decided_by',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='employment_decisions', to=settings.AUTH_USER_MODEL),
+            model_name="nurse",
+            name="employment_decided_by",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name="employment_decisions",
+                to=settings.AUTH_USER_MODEL,
+            ),
         ),
         migrations.AddField(
-            model_name='nurse',
-            name='employment_status',
-            field=models.CharField(choices=[('pending', 'Pending'), ('confirmed', 'Confirmed'), ('rejected', 'Rejected')], default='pending', max_length=12),
+            model_name="nurse",
+            name="employment_status",
+            field=models.CharField(
+                choices=[
+                    ("pending", "Pending"),
+                    ("confirmed", "Confirmed"),
+                    ("rejected", "Rejected"),
+                ],
+                default="pending",
+                max_length=12,
+            ),
+        ),
+        migrations.RunPython(
+            preserve_existing_confirmations,
+            migrations.RunPython.noop,
         ),
     ]
