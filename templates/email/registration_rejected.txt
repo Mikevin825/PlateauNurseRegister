@@ -1,0 +1,10 @@
+Dear {{ nurse.full_name }},
+
+Your registration with the Plateau State Nurse Registry has been reviewed and could not be approved at this time.
+
+Reason given: {{ reason }}
+
+You may correct the information and submit a new registration, or contact the registry office if you believe this decision was made in error.
+
+Regards,
+Plateau State Nurse Registry
